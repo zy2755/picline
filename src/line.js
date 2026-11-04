@@ -93,6 +93,7 @@ function layout() {
   });
 
   els.empty.hidden = items.length > 0;
+  reportRects();                        // 位置变了,把新的可交互区域告诉主进程
 }
 
 function makePeg(it) {
@@ -125,7 +126,9 @@ function makePeg(it) {
 }
 
 // ---------- 物理:阻尼弹簧摆动 ----------
+// 只在展开时跑。收起状态下没有任何可见动画,让 rAF 停掉可以省 CPU。
 let lastT = 0;
+let rafId = 0;
 function tick(t) {
   const dt = Math.min(0.032, lastT ? (t - lastT) / 1000 : 0.016);
   lastT = t;
@@ -139,12 +142,14 @@ function tick(t) {
     peg.a += peg.v * dt;
     peg.swing.style.transform = `rotate(${(peg.tilt + peg.a).toFixed(3)}deg)`;
   }
-  requestAnimationFrame(tick);
+  rafId = requestAnimationFrame(tick);
 }
-requestAnimationFrame(tick);
+function startTick() { if (!rafId) { lastT = 0; rafId = requestAnimationFrame(tick); } }
+function stopTick() { if (rafId) { cancelAnimationFrame(rafId); rafId = 0; } }
 
 // 微风:周期性一阵,每张错开随机延迟(原版 breeze())
 function gust() {
+  if (!shown) { setTimeout(gust, rand(3800, 8500)); return; }   // 收着就空转,不白算
   const strength = rand(1.6, 3.4);
   for (const peg of pegs.values()) {
     setTimeout(() => { peg.v += strength * Math.sqrt(30) * (Math.random() < 0.5 ? -1 : 1); },
@@ -176,14 +181,16 @@ function bindGestures(peg, it) {
     if (Math.hypot(e.screenX - downX, e.screenY - downY) < 7) return;
     clearHold();
     dragging = true;
+    dragOut = true;                     // 拖出期间不放开鼠标接管,否则系统拖放会断
     ipcRenderer.send('line:drag-active', true);
     ipcRenderer.send('item:drag', it.id, thumbnailDataUrl(peg));
-    setTimeout(() => ipcRenderer.send('line:drag-active', false), 3500);
+    setTimeout(() => { dragOut = false; ipcRenderer.send('line:drag-active', false); }, 3500);
   });
 
   peg.card.addEventListener('mouseup', (e) => {
     if (e.button === 2) return;
     clearHold();
+    dragOut = false;
     if (held || dragging) { downT = 0; return; }
     downT = 0;
     const now = Date.now();
@@ -264,6 +271,7 @@ function openMenu(x, y, it) {
   const mw = els.menu.offsetWidth, mh = els.menu.offsetHeight;
   els.menu.style.left = Math.min(x, window.innerWidth - mw - 6) + 'px';
   els.menu.style.top = Math.min(y, window.innerHeight - mh - 6) + 'px';
+  reportRects();                        // 菜单也要算进可交互区域
 
   // 只在"点在菜单外面"时收起。若在 mousedown 就无条件收起,菜单会被
   // display:none 隐藏,mouseup/click 便落不到菜单项上——菜单点了等于没点。
@@ -275,14 +283,53 @@ function onMenuOutside(e) {
 function closeMenu() {
   els.menu.hidden = true;
   window.removeEventListener('mousedown', onMenuOutside, true);
+  reportRects();
 }
 
-// ---------- 空白处点击 = 收起(原版"点击菜单栏任意处收起") ----------
-els.line.addEventListener('mousedown', (e) => {
-  if (e.target === els.line || e.target === els.pegs || e.target === els.rope) {
-    ipcRenderer.send('line:hide-blank');
+// ---------- 空白穿透:只有相片上才接管鼠标 ----------
+// 窗口默认穿透。主进程按光标位置轮询命中检测,依据就是这里上报的矩形;
+// 真收到 mousemove(说明已被接管)时,这里再做一次更精确的复核。
+// 于是空白处不再吃点击 —— 整条 210px 的窗口不会把屏幕顶边占死。
+let interactive = false;
+let dragOut = false;                 // 拖出相片的过程中:必须保持接管
+let lastMoveAt = 0;
+
+function setInteractive(next) {
+  if (next === interactive) return;
+  interactive = next;
+  ipcRenderer.send('line:passthrough', !next);
+}
+
+function hitsPeg(x, y) {
+  if (!els.menu.hidden) return true;        // 菜单开着:整条接管,才能"点别处收起"
+  const el = document.elementFromPoint(x, y);
+  return !!(el && el.closest('.card, .xbtn'));
+}
+
+// 上报可交互区域。getBoundingClientRect 会带上 #line 的滑入位移,
+// 减掉它,统一换算成"完全展开"时的坐标。
+function reportRects() {
+  const dy = els.line.getBoundingClientRect().top;
+  const rects = [];
+  for (const el of document.querySelectorAll('.card')) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    rects.push({ x: r.left, y: r.top - dy, w: r.width, h: r.height });
   }
-});
+  if (!els.menu.hidden) {
+    const m = els.menu.getBoundingClientRect();
+    if (m.width && m.height) rects.push({ x: m.left, y: m.top - dy, w: m.width, h: m.height });
+  }
+  ipcRenderer.send('line:rects', rects);
+}
+
+window.addEventListener('mousemove', (e) => {
+  lastMoveAt = performance.now();
+  if (dragOut) return;
+  setInteractive(hitsPeg(e.clientX, e.clientY));
+}, { passive: true });
+
+window.addEventListener('mouseleave', () => { if (!dragOut) setInteractive(false); });
 
 // ---------- IPC ----------
 ipcRenderer.on('items', (e, list, max) => {
@@ -293,15 +340,24 @@ ipcRenderer.on('items', (e, list, max) => {
 
 ipcRenderer.on('reveal', () => {
   shown = true;
+  // 主进程在展开瞬间把窗口切回"穿透 + 转发",这里同步状态,
+  // 否则本地记录为已接管时,下一次命中相片就不会再发请求
+  interactive = false;
   els.line.classList.remove('hidden');
   els.line.classList.add('shown');
+  startTick();
   gust();
+  reportRects();
+  setTimeout(reportRects, 460);         // 滑入动画结束后再校准一次
 });
 
 ipcRenderer.on('hide', () => {
   shown = false;
+  dragOut = false;
+  if (interactive) { interactive = false; ipcRenderer.send('line:passthrough', true); }
   els.line.classList.remove('shown');
   els.line.classList.add('hidden');
+  stopTick();
   closeMenu();
 });
 

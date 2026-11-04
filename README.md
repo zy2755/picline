@@ -9,12 +9,14 @@ Windows 版,创意与行为规格来自 Alejandro Buján 的 macOS 应用
 
 ![图标](assets/icon-256.png)
 
+![图墙演示:指针移到屏幕顶边,晾衣绳滑下来;悬停相片出现 ✕;单击复制到剪贴板;移开后收起](docs/demo.gif)
+
 ## 它能做什么
 
 | 手势 | 效果 |
 | --- | --- |
 | 鼠标停靠屏幕顶边(中部约 56% 区域)0.25 秒 | 晾衣绳滑下 |
-| 指针离开 / 点击空白处 | 收起 |
+| 指针离开窗口 | 收起 |
 | **单击** 相片 | 复制到剪贴板 |
 | **双击** | 用系统照片查看器打开 |
 | **长按** 0.45 秒 | 用画图编辑 |
@@ -25,6 +27,14 @@ Windows 版,创意与行为规格来自 Alejandro Buján 的 macOS 应用
 | `Ctrl+Alt+T` | 显示 / 收起晾衣绳 |
 
 新截图到手的一瞬间就挂上绳,不需要等任何缩略图。
+
+### 空白处不挡路
+
+晾衣绳虽然是一条横跨屏幕顶边、210px 高的窗口,但**只有相片本身会接收鼠标**:
+指针在空白处时窗口是穿透的,点击、滚轮、拖拽都直接落到底下的窗口。
+以前这一整条会把屏幕顶边占死,现在不会了(实现:`main.js` 的 `captureMouse` /
+`passThrough` + `src/line.js` 上报的可交互矩形)。
+
 
 ## 截图从哪来
 
@@ -66,8 +76,8 @@ npm start
 
 | 文件 | 说明 |
 | --- | --- |
-| `PicLine-0.1.0-win-x64-setup.exe` | 安装版,可选安装目录,建桌面/开始菜单快捷方式 |
-| `PicLine-0.1.0-win-x64-portable.exe` | 免安装单文件,双击即用,适合放U盘 |
+| `PicLine-0.1.1-win-x64-setup.exe` | 安装版,可选安装目录,建桌面/开始菜单快捷方式 |
+| `PicLine-0.1.1-win-x64-portable.exe` | 免安装单文件,双击即用,适合放U盘 |
 
 均为 Windows x64、未签名(首次运行 SmartScreen 可能提示"仍要运行")。
 
@@ -90,14 +100,51 @@ npm run build        # = npm run ico + electron-builder --win --x64
 
 | 文件 | 职责 |
 | --- | --- |
-| `main.js` | 多显示器晾衣绳窗口、顶边悬停呼出/收起、托盘、全局快捷键、IPC |
+| `main.js` | 多显示器晾衣绳窗口、顶边悬停呼出/收起、鼠标命中与穿透、托盘、全局快捷键、IPC |
 | `lib/capture.js` | 截图捕获:文件夹监视 + 剪贴板轮询 + 视觉哈希去重 + 收件箱 |
 | `lib/fullscreen.js` `lib/fullscreen.ps1` | 前台窗口轮询(Win32),判定全屏并自动隐藏 |
-| `lib/paths.js` `lib/settings.js` | 收件箱/配置存储 |
-| `src/line.html` `src/line.css` `src/line.js` | 晾衣绳 UI:绳、衣夹、玻璃相框、物理摆动、手势 |
+| `lib/paths.js` `lib/settings.js` | 收件箱/配置存储(`TQ_DATA_DIR` 可把数据目录指到别处,录制演示用) |
+| `src/line.html` `src/line.css` `src/line.js` | 晾衣绳 UI:绳、衣夹、玻璃相框、物理摆动、手势、可交互区域上报 |
 | `scripts/make-icon.js` | 代码绘制应用图标(SDF + 超采样) |
+| `scripts/make-ico.js` | 把 PNG 打包成多尺寸 `assets/icon.ico`(安装包图标) |
 | `scripts/test-flow.ps1` | 交互流程自动化测试(悬停/复制/删除/收起) |
 | `scripts/cdp-test.js` | 通过 CDP 驱动真实 UI 的 discard 测试 |
+| `scripts/mem-probe.sh` | 内存取样:跑一次应用,把各进程内存写盘(靠 `TQ_MEMPROBE`) |
+| `scripts/make-demo-gif.sh` | 一键录制 README 顶部的演示 GIF(见下) |
+
+### 演示 GIF 怎么来的
+
+```bash
+bash scripts/make-demo-gif.sh          # 输出 docs/demo.gif
+```
+
+它会起一块渐变"舞台"窗口当背景(`scripts/demo-backdrop.js`,故意少 8px 高,
+否则会被自家的全屏检测判成全屏),往临时收件箱塞几张代码生成的假截图
+(`scripts/make-demo-photos.js`),然后用真实光标走一遍
+`顶边悬停 → 悬停相片 → 单击复制 → 移开收起`,逐帧截屏
+(`scripts/record-demo.py`,纯 ctypes 调 GDI),最后 ffmpeg 合成调色板优化的 GIF。
+全程不碰你真实的收件箱、壁纸和桌面。
+
+## 资源占用
+
+Electron 应用的天然开销,能做到的优化都做了:
+
+| 配置 | 进程数 | 内存(工作集合计) |
+| --- | --- | --- |
+| 默认 | 4 | 468 MB |
+| `--disable-gpu` | 4 | 456 MB |
+| `--in-process-gpu` | 3 | 384 MB |
+| **`--in-process-gpu` + 关硬件加速(现在的默认)** | **3** | **373 MB** |
+
+- 界面只有 CSS/SVG 动画和几张缩略图,不需要硬件合成,所以把 GPU 进程并进主进程、
+  关掉硬件加速(`main.js` 开头两行),透明窗口和阴影不受影响。
+- 收起状态下渲染进程的 `requestAnimationFrame` 与微风逻辑都会停掉,只留主进程
+  60ms 一次的光标轮询(它本来就要轮询顶边悬停)。
+- 数据全是本机文件,没有网络请求,也就没有网络进程的额外开销。
+
+复现:`bash scripts/mem-probe.sh base`(可选参数会原样传给 Electron,例如
+`bash scripts/mem-probe.sh nogpu --disable-gpu`)。
+
 
 ### 从原版移植的参数
 

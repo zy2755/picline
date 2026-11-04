@@ -19,6 +19,14 @@ const settings = require('./lib/settings');
 const { Capture } = require('./lib/capture');
 const { FullscreenMonitor } = require('./lib/fullscreen');
 
+// ---------- 内存优化 ----------
+// 这个界面只有 CSS/SVG 动画与一张张缩略图,不需要硬件合成:
+// 把 GPU 进程并进主进程再关掉硬件加速,实测(scripts/mem-probe.sh)
+// 总工作集 468MB → 373MB、进程数 4 → 3,透明窗口与阴影渲染不受影响。
+// 必须在 app ready 之前调用。
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('in-process-gpu');
+
 const PANEL_H = 210;              // 晾衣绳窗口高度(原版 Layout.panelHeight)
 const REVEAL_DELAY = 250;         // 顶边停留呼出延时(ms,原版 0.25s)
 const BAND_H = 4;                 // 顶边触发带厚度(px)
@@ -77,7 +85,8 @@ function createLineWindows() {
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setIgnoreMouseEvents(true);
     win.loadFile(path.join(__dirname, 'src', 'line.html'));
-    lineWindows.set(d.id, { win, shown: false, pinned: false, hideTimer: null, peekTimer: null, sinceInBand: 0 });
+    lineWindows.set(d.id, { win, shown: false, pinned: false, hideTimer: null, peekTimer: null,
+      sinceInBand: 0, capturing: false, dragging: false, rects: [] });
   }
 }
 
@@ -86,6 +95,61 @@ function broadcast(channel, ...args) {
     if (!win.isDestroyed()) win.webContents.send(channel, ...args);
   }
 }
+
+// ---------- 鼠标命中策略 ----------
+// 窗口整条横跨屏幕顶边,若展开时无条件接收鼠标,空白处也会把点击吞掉。
+// 做法:窗口默认穿透;主进程本来就在轮询光标位置,顺手做一次命中检测 ——
+// 指针落在相片/菜单上才把鼠标接收回来,离开就立刻放开。
+// 渲染端另外会在真收到 mousemove(已接收状态)时做一次更精确的复核。
+//   passThrough: 穿透(展开中但没命中)
+//   hardIgnore : 完全穿透(收起时)
+//   captureMouse: 接收鼠标(命中了相片)
+// 注:Electron 在 Windows 上并不真的转发 mousemove(实测 0 条),
+// 所以这里就是纯穿透,命中判断交给主进程轮询。
+function passThrough(entry) {
+  const { win } = entry;
+  if (win.isDestroyed()) return;
+  entry.capturing = false;
+  try { win.setIgnoreMouseEvents(true); } catch {}
+}
+function hardIgnore(entry) {
+  const { win } = entry;
+  if (win.isDestroyed()) return;
+  entry.capturing = false;
+  try { win.setIgnoreMouseEvents(true); } catch {}
+}
+function captureMouse(entry, pt) {
+  const { win } = entry;
+  if (win.isDestroyed()) return;
+  if (!entry.capturing) {
+    entry.capturing = true;
+    try { win.setIgnoreMouseEvents(false); } catch {}
+    // 刚解除穿透时 Chromium 还不知道指针在哪,补一条合成的 mousemove,
+    // 否则"移进相片后停住"要等下次真实移动才会出现 hover 效果
+    if (pt) {
+      try {
+        const b = win.getBounds();
+        win.webContents.sendInputEvent({
+          type: 'mouseMove', x: Math.round(pt.x - b.x), y: Math.round(pt.y - b.y),
+        });
+      } catch {}
+    }
+  }
+}
+
+// 指针是否落在渲染端上报的"可交互矩形"里(单位:CSS px,相对窗口左上角)
+function cursorHits(entry, pt) {
+  if (!entry.shown || entry.dragging) return false;
+  if (!entry.rects || !entry.rects.length) return false;
+  const b = entry.win.getBounds();
+  const x = pt.x - b.x, y = pt.y - b.y;
+  if (x < 0 || y < 0 || x > b.width || y > b.height) return false;
+  for (const r of entry.rects) {
+    if (x >= r.x - 2 && x <= r.x + r.w + 2 && y >= r.y - 2 && y <= r.y + r.h + 2) return true;
+  }
+  return false;
+}
+
 
 function revealLine(entry, { pinned = false, peek = false } = {}) {
   if (!settings.get('showLine')) return;
@@ -96,7 +160,7 @@ function revealLine(entry, { pinned = false, peek = false } = {}) {
   entry.shown = true;
   entry.pinned = pinned;
   try {
-    win.setIgnoreMouseEvents(false);
+    passThrough(entry);            // 先穿透,等渲染端报告命中了相片再收回鼠标
     win.showInactive();
     win.webContents.send('reveal');
   } catch {}
@@ -122,8 +186,8 @@ function hideLine(entry) {
   try {
     win.webContents.send('hide');
   } catch {}
-  // 等收起动画播完再恢复点击穿透
-  setTimeout(() => { if (!entry.shown && !win.isDestroyed()) win.setIgnoreMouseEvents(true); }, 260);
+  // 等收起动画播完再恢复穿透(收起后不再需要转发鼠标移动)
+  setTimeout(() => { if (!entry.shown && !win.isDestroyed()) hardIgnore(entry); }, 260);
 }
 
 function togglePinned() {
@@ -179,7 +243,16 @@ function startCursorPolling() {
         if (!entry.hideTimer) entry.hideTimer = setTimeout(() => hideLine(entry), HIDE_DELAY);
       }
     }
-  }, 120);
+
+    // 命中检测:决定这一瞬间窗口要不要接收鼠标。
+    // 指针在相片/菜单上 → 接收;在空白处或窗口外 → 立刻放开,点击落到底下。
+    for (const entry of lineWindows.values()) {
+      if (entry.win.isDestroyed()) continue;
+      const hit = cursorHits(entry, pt);
+      if (hit && !entry.capturing) captureMouse(entry, pt);
+      else if (!hit && entry.capturing) passThrough(entry);
+    }
+  }, 60);
 }
 
 // ---------- 捕获 ----------
@@ -329,12 +402,38 @@ function registerIpc() {
   });
 
   ipcMain.on('line:hide-blank', () => hideAll());
+
+  // 渲染端的命中检测结果:pass=true 表示指针在空白处,窗口该让开
+  ipcMain.on('line:passthrough', (e, pass) => {
+    for (const entry of lineWindows.values()) {
+      if (entry.win.isDestroyed() || entry.win.webContents !== e.sender) continue;
+      if (!entry.shown) return;              // 收起了就别再动,交给 hideLine 收尾
+      if (pass) passThrough(entry);
+      else captureMouse(entry, screen.getCursorScreenPoint());
+      return;
+    }
+  });
+
+  // 渲染端上报"可交互矩形"(相片、菜单),供主进程轮询命中检测用
+  ipcMain.on('line:rects', (e, rects) => {
+    for (const entry of lineWindows.values()) {
+      if (entry.win.isDestroyed() || entry.win.webContents !== e.sender) continue;
+      entry.rects = Array.isArray(rects) ? rects : [];
+      // 立刻用新矩形复核一次,免得指针正好停在新位置还要等下一拍
+      const pt = screen.getCursorScreenPoint();
+      if (cursorHits(entry, pt)) captureMouse(entry, pt); else passThrough(entry);
+      return;
+    }
+  });
+
   ipcMain.on('line:drag-active', (e, active) => {
     // 拖放进行中:抑制自动收起 3.5s,防止拖到一半线消失
     for (const entry of lineWindows.values()) {
       clearTimeout(entry.hideTimer);
+      entry.dragging = !!active;
       if (active) {
-        entry.hideTimer = setTimeout(() => { entry.hideTimer = null; }, 3500);
+        captureMouse(entry);                 // 拖拽期间必须保持接收,否则系统拖放会中断
+        entry.hideTimer = setTimeout(() => { entry.hideTimer = null; entry.dragging = false; }, 3500);
       }
     }
   });
@@ -375,3 +474,12 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => { /* 托盘常驻,不退出 */ });
 app.on('before-quit', () => { quitting = true; });
+
+// [临时]内存取样:TQ_MEMPROBE=<路径> 时,启动 12 秒后把各进程内存写盘并退出
+if (process.env.TQ_MEMPROBE) {
+  app.whenReady().then(() => setTimeout(() => {
+    const m = app.getAppMetrics().map(p => ({ type: p.type, pid: p.pid, wsKB: p.memory.workingSetSize }));
+    try { fs.writeFileSync(process.env.TQ_MEMPROBE, JSON.stringify(m, null, 2)); } catch {}
+    quitting = true; app.quit();
+  }, 12000));
+}

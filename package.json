@@ -1,7 +1,7 @@
 {
   "name": "tuqiang-picline",
   "productName": "图墙",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "截图,晾起来。——把每张截图挂到屏幕顶端的晾衣绳上(Windows 版,灵感来自 Tendedero)",
   "main": "main.js",
   "author": "图墙 contributors",
