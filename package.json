@@ -1,0 +1,72 @@
+{
+  "name": "tuqiang-picline",
+  "productName": "图墙",
+  "version": "0.1.0",
+  "description": "截图,晾起来。——把每张截图挂到屏幕顶端的晾衣绳上(Windows 版,灵感来自 Tendedero)",
+  "main": "main.js",
+  "author": "图墙 contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zy2755/picline.git"
+  },
+  "homepage": "https://github.com/zy2755/picline",
+  "scripts": {
+    "start": "electron .",
+    "icon": "node scripts/make-icon.js",
+    "ico": "node scripts/make-ico.js",
+    "dist": "electron-builder --win --x64",
+    "build": "npm run ico && npm run dist"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "pngjs": "^7.0.0"
+  },
+  "build": {
+    "appId": "com.zy2755.picline",
+    "productName": "图墙",
+    "copyright": "MIT Licensed · inspired by Tendedero",
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "lib/**/*",
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "LICENSE"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "PicLine-${version}-win-${arch}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "PicLine-${version}-win-${arch}-portable.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "图墙",
+      "language": "2052",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

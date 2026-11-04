@@ -1,0 +1,10 @@
+# 统一换行符:仓库里存 LF,检出到工作区时按平台转换
+* text=auto
+
+# PowerShell 脚本必须是 CRLF
+*.ps1 text eol=crlf
+
+# 二进制资源不要动
+*.png binary
+*.ico binary
+*.exe binary
