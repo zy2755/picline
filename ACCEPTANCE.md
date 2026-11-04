@@ -352,7 +352,7 @@ python scripts/verify-install.py              # 报告 target/dist-verify/report
 | 3 安装进度 | NSIS 安装完成后自动前进、Finish 页不允许回退，未截到进度明细；改由落盘结果验证 |
 | 4 正在完成 | 「安装完成。」；`立即运行 图墙` 默认**未勾**（`MUI_FINISHPAGE_RUN_NOTCHECKED`）；`完成(F)` 焦点；点完 exit=0 |
 
-**第二轮（23:40 重打包 → 23:43–23:46 复检）** 新安装器 562,260 B、SHA256 `D72CFE1E…15DED`：
+**第二轮（23:40 重打包 → 23:43–23:46 复检）** 新安装器 562,300 B、SHA256 `D72CFE1E…15DED`：
 欢迎页 / 完成页文案与行距全部通过，无压字、无裁切；覆盖安装 exit=0，安装目录 `picline-core.exe`
 与 `dist` portable **逐字节一致**（SHA256 `DA367808…9404F`，PE subsystem=GUI）。
 
