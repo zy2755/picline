@@ -1,0 +1,43 @@
+// 图墙 / PicLine —— Win32 资源脚本
+//
+// 由 build.rs 读取：把 @ICON_PATH@ 替换成绝对路径，转成 UTF-16LE(with BOM)
+// 后交给 Windows SDK 的 rc.exe 编译成 .res，再通过 rustc-link-arg-bins 链接进 exe。
+//
+// 为什么要内嵌：原版托盘图标从 exe 旁边的 assets/icon.ico 读取，那样 portable
+// 就必须是「自解压包 + 散文件」。内嵌后 picline-core.exe 本身零外部依赖，
+// 直接改名/复制就能当单文件 portable 用，资源管理器与快捷方式也能显示图标。
+
+#define IDI_APP 101
+#define VS_VERSION_INFO 1
+
+IDI_APP ICON "@ICON_PATH@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,1,0
+ PRODUCTVERSION 0,1,1,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        /* 0804 = 简体中文, 04b0 = Unicode(1200) */
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "zy2755"
+            VALUE "FileDescription", "图墙 - 截图晾衣绳"
+            VALUE "FileVersion", "0.1.1"
+            VALUE "InternalName", "picline-core"
+            VALUE "LegalCopyright", "MIT Licensed · inspired by Tendedero"
+            VALUE "OriginalFilename", "picline-core.exe"
+            VALUE "ProductName", "图墙"
+            VALUE "ProductVersion", "0.1.1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
+END
