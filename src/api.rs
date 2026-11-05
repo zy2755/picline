@@ -333,6 +333,7 @@ extern "system" {
 #[link(name = "comdlg32")]
 extern "system" {
     pub fn GetSaveFileNameW(ofn: *mut OpenFileNameW) -> i32;
+    pub fn CommDlgExtendedError() -> u32;
 }
 
 pub fn wide(s: &str) -> Vec<u16> {

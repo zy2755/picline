@@ -53,6 +53,8 @@ pub struct CaptureCore {
     pub last_file_capture: Option<(String, i64)>,
     pub last_clip_capture: Option<ClipCapture>,
     pub seen_visual: HashMap<String, i64>,
+    /// 「取下并保存到截图文件夹」放回去的文件路径：绝不能再次被当成新截图抓回来。
+    pub ignored: HashSet<PathBuf>,
     pub stopped: bool,
 }
 
@@ -68,6 +70,7 @@ impl CaptureCore {
             last_file_capture: None,
             last_clip_capture: None,
             seen_visual: HashMap::new(),
+            ignored: HashSet::new(),
             stopped: false,
         }
     }
@@ -158,6 +161,16 @@ impl CaptureCore {
     /// 只收启动之后的新文件（元数据事件/云同步引起的旧文件不动）
     pub fn is_fresh(&self, mtime_ms: f64) -> bool {
         mtime_ms >= self.started_at as f64
+    }
+
+    /// 「取下」后把文件放回截图文件夹时登记：截图目录扫描要永久跳过它，
+    /// 否则 mtime 仍在 fresh 窗口内，会立刻被当成新截图抓回收件箱（闪一下就回来）。
+    pub fn ignore_path(&mut self, path: &Path) {
+        self.ignored.insert(path.to_path_buf());
+    }
+
+    pub fn is_ignored(&self, path: &Path) -> bool {
+        self.ignored.contains(path)
     }
 }
 

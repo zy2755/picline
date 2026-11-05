@@ -797,7 +797,9 @@ fn trash(path: &PathBuf) -> Result<(), String> {
 fn save_as(a: &mut App, id: &str) {
     let Some(path) = a.item_path(id) else { return };
     let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "png".into());
-    let filter = wide(&format!("图片 (*.{})\0*.{}\0\0", ext, ext));
+    let filter = wide(&format!(
+        "图片 (*.{})\0*.{}\0所有文件\0*.*\0\0", ext, ext
+    ));
     let mut buf = [0u16; 260];
     let name = wide(id);
     for (i, c) in name.iter().take(259).enumerate() {
@@ -807,20 +809,38 @@ fn save_as(a: &mut App, id: &str) {
     let def = wide(&ext);
     let mut ofn: OpenFileNameW = unsafe { std::mem::zeroed() };
     ofn.l_struct_size = std::mem::size_of::<OpenFileNameW>() as u32;
-    ofn.hwnd_owner = a.controller;
+    // ⚠️ 不要用 a.controller：它是 parent=-3（HWND_MESSAGE）的 message-only 窗口，
+    // 通用对话框以它为 owner 时不会正常显示（表现为点「另存为」毫无反应）。
+    // 传 0 = 无 owner，对话框独立居中；要贴在图墙上可改传 displays[0].hwnd。
+    ofn.hwnd_owner = 0;
     ofn.lpstr_filter = filter.as_ptr();
     ofn.lpstr_file = buf.as_mut_ptr();
     ofn.n_max_file = 260;
     ofn.lpstr_title = title.as_ptr();
     ofn.lpstr_def_ext = def.as_ptr();
+    // OVERWRITEPROMPT | HIDEREADONLY | NOCHANGEDIR | PATHMUSTEXIST
+    ofn.flags = 0x0000_0002 | 0x0000_0004 | 0x0000_0008 | 0x0000_0800;
     let ok = unsafe { GetSaveFileNameW(&mut ofn) };
     if ok == 0 {
+        // 区分「用户取消」和「对话框本身失败」：后者必须让用户看见，不能静默。
+        let err = unsafe { CommDlgExtendedError() };
+        trace::ev("save_as_abort", &format!("commdlg_err=0x{:X}", err));
+        if err != 0 {
+            a.toast(&format!("保存对话框失败 0x{:X}", err));
+        }
         return;
     }
     let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     let dest = String::from_utf16_lossy(&buf[..len]);
-    if fs::copy(&path, &dest).is_ok() {
-        a.toast("已保存");
+    match fs::copy(&path, &dest) {
+        Ok(_) => {
+            trace::ev("save_as_ok", &dest);
+            a.toast("已保存");
+        }
+        Err(e) => {
+            trace::ev("save_as_err", &format!("{}: {}", dest, e));
+            a.toast("保存失败");
+        }
     }
 }
 
@@ -832,7 +852,15 @@ fn take_down(a: &mut App, id: &str) {
     let ok = fs::rename(&path, &dest).is_ok()
         || (fs::copy(&path, &dest).is_ok() && fs::remove_file(&path).is_ok());
     if ok {
+        // 目标就在截图目录里，必须立刻登记忽略，否则下一轮 250ms 扫描
+        // 会把它当新截图移回收件箱（用户看到的就是"闪一下又回来"）。
+        a.core.ignore_path(&dest);
+        trace::ev("take_down", &dest.to_string_lossy());
+        a.toast("已保存到截图文件夹");
         a.rescan();
+    } else {
+        trace::ev("take_down_fail", &path.to_string_lossy());
+        a.toast("取下失败");
     }
 }
 
@@ -1113,6 +1141,10 @@ fn tick_capture(a: &mut App, t: i64) {
             continue;
         }
         let path = e.path();
+        // 「取下并保存到截图文件夹」放回去的文件：跳过，别抓回来
+        if a.core.is_ignored(&path) {
+            continue;
+        }
         let md = match e.metadata() {
             Ok(m) if m.is_file() => m,
             _ => continue,
