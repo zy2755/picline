@@ -787,11 +787,22 @@ fn trash(path: &PathBuf) -> Result<(), String> {
         lpsz_progress_title: std::ptr::null(),
     };
     let r = unsafe { SHFileOperationW(&mut op) };
-    if r == 0 && op.f_any_operations_aborted == 0 {
-        Ok(())
-    } else {
-        Err(format!("SHFileOperation 失败 (code {})", r))
+    // SHFileOperationW 的返回值在本机实测不可靠：文件确实进了回收站，却返回 2。
+    // 因此以文件系统实际结果为准（删不掉才是失败），返回值只写入 trace 供诊断。
+    if r != 0 {
+        trace::ev(
+            "trash_ret",
+            &format!("r={} aborted={} gone={}", r, op.f_any_operations_aborted, !path.exists()),
+        );
     }
+    if !path.exists() {
+        return Ok(());
+    }
+    if r == 0 && op.f_any_operations_aborted == 0 {
+        // 返回成功但文件还在：同样按失败处理
+        return Err("文件仍存在".to_string());
+    }
+    Err(format!("SHFileOperation 失败 (code {})", r))
 }
 
 fn save_as(a: &mut App, id: &str) {
@@ -900,10 +911,22 @@ fn do_copy(a: &mut App, id: &str) {
     let ok = copy_to_clipboard(&path);
     trace::ev("copy", if ok { "ok" } else { "fail:clipboard" });
     if ok {
-        // 读回刚写入的图，抑制轮询把自己再挂一次
-        if let Some(snap) = win32::clipboard_snapshot() {
-            let key = visual::visual_key(&snap.quantized, snap.width, snap.height);
-            a.core.suppress_copy(&key, now());
+        // 抑制轮询把自己刚写进剪贴板的图当新截图再挂一次。
+        // 首选按视觉 key 精确抑制（读回剪贴板量化后比对）；但刚 SetClipboardData
+        // 之后立刻 OpenClipboard 可能拿不到内容（owner 正在渲染），此时退化为
+        // 「时间窗内一律跳过剪贴板通道」，否则就会多挂一张一模一样的图。
+        let t = now();
+        match win32::clipboard_snapshot() {
+            Some(snap) => {
+                let key = visual::visual_key(&snap.quantized, snap.width, snap.height);
+                trace::ev("copy_suppress", "key");
+                a.core.suppress_copy(&key, t);
+            }
+            None => {
+                trace::ev("copy_suppress", "window-only");
+                a.core.suppress_until = t + crate::capture::SUPPRESS_MS;
+                a.core.last_clipboard_key = None;
+            }
         }
         a.toast("已复制到剪贴板");
     }
