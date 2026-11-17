@@ -7,6 +7,8 @@
 //!   - 单击复制 / 双击打开 / 长按 450ms 画图 / 右键菜单 / ✕ 回收站 / Ctrl+Alt+T
 //!   - 阻尼弹簧 K=30 C=2.6、微风 1.6~3.4°、tilt ±2.5°、绳垂度 min(30, w*0.018)
 //!   - peek 2.5s、收起 easeIn 0.22s、展开 easeOutBack 0.42s
+//!   - 帧驱动：动画期 10ms SetTimer（实际 ~15.6ms ≈ 64fps）、空闲期 60ms；
+//!     详见 FRAME_FAST_MS 注释。16ms 会被系统量化到 31.25ms，切勿改回。
 
 #![allow(dead_code)]
 
@@ -39,6 +41,31 @@ const DRAG_PX: f32 = 7.0;
 const DOUBLE_MS: i64 = 350;
 const TOAST_MS: i64 = 1200;
 const CROSS_TTL: i64 = 10_000;
+
+// 帧驱动：WM_TIMER 的 elapse 会被 Windows 向上量化到 15.625ms 时钟的整数倍。
+// 实测（2026-11-07，本机）：请求 16ms 时一半帧落到 2 个 tick = 31.25ms，
+// 中位仅 32.7fps；请求 1/5/10/15ms 都稳定落在 1 个 tick = 15.6ms ≈ 64fps。
+// 取 10ms：既离 15.625 边界有余量，又不会在某些高精度时钟的机器上被当成逐毫秒轮询。
+// 空闲档保留 60ms（实测 63ms），只驱动光标/剪贴板轮询，不重绘。
+const FRAME_FAST_MS: u32 = 10;
+const FRAME_IDLE_MS: u32 = 60;
+
+// ---- 左下角操作提示（可调外观，2026-11-08 加固可读性）----
+// 原版是 11px / alpha 0x80 的深棕字**直接画在透明分层窗口上**，底下就是用户壁纸：
+// 壁纸一深就吞字，一浅又失去边缘，且 GDI+ 在透明位图上只能用灰度抗锯齿
+// （ClearType 需要不透明底），11px 小字笔画本就细，于是"看不太清"。
+// 修法照抄空状态提示：先垫一层近白胶囊把壁纸隔开，再画不透明深字，字号 11→12.5。
+//   · 想回到"无衬底纯文字"：HINT_BG 设 0（若壁纸偏深，把 HINT_INK 一起改浅）
+//   · 嫌字大/小：改 HINT_FONT；嫌胶囊太实/太透：改 HINT_BG 的最高两位（0x00~0xFF）
+//   · 改提示文案：只改 HINT_TEXT，胶囊宽度会按新文案自动重算
+const HINT_TEXT: &str = "点击复制 · 双击打开 · 长按编辑 · 拖出保存 · 右键更多";
+const HINT_FONT: f32 = 12.5;
+const HINT_INK: u32 = 0xFF_3A2E22;  // ARGB：不透明深棕
+const HINT_BG: u32 = 0xE6_FCFAF5;   // ARGB：90% 不透明近白胶囊
+const HINT_X: f32 = 18.0;           // 文字起点；胶囊左缘 = 18 - HINT_PAD_X = 8px
+const HINT_Y: f32 = PANEL_H - 27.0; // 胶囊 183..207，面板底 210 留 3px
+const HINT_H: f32 = 24.0;
+const HINT_PAD_X: f32 = 10.0;
 
 const ID_TOGGLE: u16 = 1;
 const ID_TAKEOVER: u16 = 2;
@@ -173,6 +200,11 @@ struct App {
     gusts: Vec<(i64, usize, f32)>,
     rng: u64,
     timer_ms: u32,
+    /// 弹簧积分用的上一帧时刻（真实时间增量，避免掉帧时摆动变慢）
+    last_physics_ms: i64,
+    /// 帧率可观测钩子：只在 TQ_TRACE 存在时累计，默认运行零开销
+    fps_frames: u32,
+    fps_since: i64,
     last_items_sig: String,
     probe_out: Option<PathBuf>,
     probe_start: std::time::Instant,
@@ -205,6 +237,31 @@ fn rand01() -> f32 {
 }
 fn rand_range(lo: f32, hi: f32) -> f32 {
     lo + rand01() * (hi - lo)
+}
+
+/// 弹簧积分用的真实帧间隔（秒）。上限 33ms 是 K=30 显式欧拉积分的稳定边界：
+/// 偶发掉帧或系统休眠唤醒后不会因巨大的 dt 把相片甩飞。
+fn physics_dt(prev_ms: i64, now_ms: i64) -> f32 {
+    (((now_ms - prev_ms) as f32) / 1000.0).clamp(0.0, 0.033)
+}
+
+/// 估算提示文字宽度：CJK/全角按 1 个字号，ASCII 空格与「·」按 0.45 个字号。
+/// 不引入字体度量 API，够用来给胶囊定宽（宁可略宽一点，内边距更舒服）。
+fn hint_text_width() -> f32 {
+    HINT_TEXT
+        .chars()
+        .map(|c| if (c as u32) >= 0x2E80 { HINT_FONT } else { HINT_FONT * 0.45 })
+        .sum()
+}
+
+/// 展开动画用 easeOutBack（c1=1.70158 / c3=2.70158），峰值 e=1.1 出现在 p≈0.58，
+/// 于是 offset 会从 -222 过冲到 **+22.2px**。分层窗口只有 PANEL_H=210 高，
+/// 贴底元素（操作提示胶囊 y=183..207、toast y=176..200）会被下沿裁掉，
+/// 看起来就是「弹出收尾那一瞬间跑出面板」。
+/// 这里把过冲量从贴底元素的**局部 y** 里减掉，让它们在回弹期间钉在最终位置；
+/// 收起时 offset<0 不补偿，仍正常跟随面板向上滑出。曲线手感完全不动。
+fn bottom_anchored_y(y: f32, offset: f32) -> f32 {
+    y - offset.max(0.0)
 }
 
 fn now() -> i64 {
@@ -362,6 +419,7 @@ impl App {
         self.hide_at = 0;
         self.peek_until = if peek { now() + PEEK_MS } else { 0 };
         self.start_anim(HIDE_OFFSET.max(self.offset), 0.0, 420);
+        self.last_physics_ms = now(); // 弹簧从展开这一刻起按真实帧间隔积分
         self.set_capture(false);
         self.next_gust = now() + 300;
         trace::ev("reveal", &format!("pinned={} peek={}", pinned, peek));
@@ -599,14 +657,29 @@ fn render_one(idx: usize) {
         canvas.round_rect((lw / 2.0 - 150.0) as i32, 96, 300, 30, 15, 0xE0_FCFAF5);
         canvas.text("还没有截图 · 按 Win+Shift+S 拍一张", lw / 2.0 - 150.0, 96.0, 300.0, 30.0, 12.5, 0xFF_6B5C48, true);
     }
-    canvas.text("点击复制 · 双击打开 · 长按编辑 · 拖出保存 · 右键更多", 14.0, PANEL_H - 22.0, 460.0, 18.0, 11.0, 0x80_463A2C, false);
+    // 底部操作提示：先垫胶囊把不确定的壁纸颜色隔开，再画不透明深字。
+    // 胶囊宽度按文案自动估算，改 HINT_TEXT / HINT_FONT 不会溢出。
+    let hint_tw = hint_text_width();
+    let hint_bg_x = HINT_X - HINT_PAD_X;
+    let hint_bg_w = hint_tw + 2.0 * HINT_PAD_X;
+    // 展开回弹（offset>0）时把贴底元素钉住，否则会被 210px 窗口下沿裁掉
+    let hint_y = bottom_anchored_y(HINT_Y, offset);
+    if HINT_BG != 0 {
+        canvas.round_rect(
+            hint_bg_x as i32, hint_y as i32, hint_bg_w as i32, HINT_H as i32,
+            (HINT_H / 2.0) as i32, HINT_BG,
+        );
+    }
+    // w 多给 8px 余量：GDI+ 在矩形恰好等宽时可能把最后一个字折到第二行
+    canvas.text(HINT_TEXT, HINT_X, hint_y, hint_tw + 8.0, HINT_H, HINT_FONT, HINT_INK, false);
     if a.menu_open {
-        draw_menu(&canvas, a.menu_x, a.menu_y, lw);
+        draw_menu(&canvas, a.menu_x, bottom_anchored_y(a.menu_y, offset), lw);
     }
     if now() < a.toast_until && !a.toast.is_empty() {
+        let ty = bottom_anchored_y(PANEL_H - 34.0, offset);
         let tw = a.toast.chars().count() as f32 * 12.0 + 28.0;
-        canvas.round_rect((lw / 2.0 - tw / 2.0) as i32, PANEL_H as i32 - 34, tw as i32, 24, 12, 0xD9_201C16);
-        canvas.text(&a.toast, lw / 2.0 - tw / 2.0, PANEL_H - 34.0, tw, 24.0, 12.0, 0xFF_F7F3EA, true);
+        canvas.round_rect((lw / 2.0 - tw / 2.0) as i32, ty as i32, tw as i32, 24, 12, 0xD9_201C16);
+        canvas.text(&a.toast, lw / 2.0 - tw / 2.0, ty, tw, 24.0, 12.0, 0xFF_F7F3EA, true);
     }
 
     canvas.blit_premultiplied(bits, pw * 4);
@@ -1401,7 +1474,10 @@ fn tick() {
             }
             a.next_gust = t + rand_range(3800.0, 8500.0) as i64;
         }
-        let dt = 0.016f32;
+        // 真实帧间隔积分：偶发 31ms 抖动时摆动速度不减半，快帧也不会被加速。
+        // 上限 33ms 是这套显式欧拉积分（K=30）的稳定边界；超出按 33ms 计。
+        let dt = physics_dt(a.last_physics_ms, t);
+        a.last_physics_ms = t;
         for p in &mut a.pegs {
             if p.a.abs() < 0.004 && p.v.abs() < 0.02 {
                 p.a = 0.0;
@@ -1427,8 +1503,23 @@ fn tick() {
     }
     // 接管期间持续重绘：保证 alpha 底噪与 capturing 状态同步，
     // 否则鼠标刚移进相片那一帧用的还是上一帧的 alpha=0 表面。
-    if need_render || a.capturing || a.gesture.down {
+    let rendered = need_render || a.capturing || a.gesture.down;
+    if rendered {
         render_all();
+    }
+    // 验收钩子：固定 250ms 窗口统计「真实渲染帧数」。用固定窗口而不是"攒够一秒才写"，
+    // 静止期（不重绘）也会如实输出 0，不会把两段动画之间的空闲误算成低帧率。
+    // TQ_TRACE 未设置时只是一次 OnceLock 查询，不写文件、不 format。
+    if trace::enabled() {
+        if rendered {
+            a.fps_frames += 1;
+        }
+        let span = t - a.fps_since;
+        if span >= 250 {
+            trace::ev("fps", &format!("{:.1}", a.fps_frames as f64 * 1000.0 / span as f64));
+            a.fps_frames = 0;
+            a.fps_since = t;
+        }
     }
     write_state(a);
     update_timer_rate();
@@ -1490,7 +1581,7 @@ fn poll_cursor(_t: i64) {
 fn update_timer_rate() {
     let a = app();
     let fast = a.animating || a.shown || a.menu_open || now() < a.toast_until;
-    let want = if fast { 16u32 } else { 60u32 };
+    let want = if fast { FRAME_FAST_MS } else { FRAME_IDLE_MS };
     if want != a.timer_ms {
         a.timer_ms = want;
         unsafe { SetTimer(a.controller, 1, want, std::ptr::null_mut()) };
@@ -1884,7 +1975,10 @@ pub fn run(opts: GuiOptions) {
             next_gust: t0 + 1500,
             gusts: Vec::new(),
             rng: 8_812_726_314_123_252,
-            timer_ms: 60,
+            timer_ms: FRAME_IDLE_MS,
+            last_physics_ms: t0,
+            fps_frames: 0,
+            fps_since: t0,
             last_items_sig: String::new(),
             probe_out: opts.probe_out,
             probe_start: std::time::Instant::now(),
@@ -1900,7 +1994,7 @@ pub fn run(opts: GuiOptions) {
     app().tray_added = true;
     unsafe {
         RegisterHotKey(controller, 1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_T);
-        SetTimer(controller, 1, 60, std::ptr::null_mut());
+        SetTimer(controller, 1, FRAME_IDLE_MS, std::ptr::null_mut());
     }
     render_all();
 
@@ -1952,6 +2046,50 @@ mod tests {
     #[test]
     fn menu_geometry_matches_css() {
         assert_eq!(super::menu_height(), 10.0 + 9.0 + 156.0);
+    }
+
+    #[test]
+    fn hint_capsule_fits_text_and_panel() {
+        let w = super::hint_text_width();
+        let capsule = w + 2.0 * super::HINT_PAD_X;
+        assert!(w > 250.0, "提示文案宽度估算异常: {}", w);
+        assert!(capsule < 460.0, "胶囊 {}px 超出底部可用区域会压到别处", capsule);
+        assert!(super::HINT_Y + super::HINT_H <= super::PANEL_H, "胶囊底部越出面板");
+        assert!((super::HINT_INK >> 24) == 0xFF, "提示文字必须不透明，否则又会被壁纸吃掉");
+    }
+
+    #[test]
+    fn bottom_elements_survive_reveal_overshoot() {
+        // easeOutBack 峰值 e=1.1 ⇒ offset = -222 + 222*1.1 = +22.2
+        let peak = (-super::HIDE_OFFSET) * 0.1;
+        assert!((peak - 22.2).abs() < 0.01, "过冲峰值算错了: {}", peak);
+        for &off in &[0.0f32, 5.0, peak] {
+            let screen_y = super::bottom_anchored_y(super::HINT_Y, off) + off;
+            assert!((screen_y - super::HINT_Y).abs() < 1e-3,
+                    "offset={} 时胶囊被顶到 {}（应钉在 {}）", off, screen_y, super::HINT_Y);
+            assert!(screen_y + super::HINT_H <= super::PANEL_H,
+                    "offset={} 时胶囊下沿越出 {}px 窗口", off, super::PANEL_H);
+        }
+        // 收起（offset<0）不补偿，照常跟随面板向上滑出
+        assert!((super::bottom_anchored_y(super::HINT_Y, -100.0) - super::HINT_Y).abs() < 1e-3);
+    }
+
+    #[test]
+    fn fast_frame_timer_must_stay_below_windows_tick() {
+        // Windows USER 定时器把 elapse 向上量化到 15.625ms 的整数倍：
+        // 请求 16ms 会大量落到 2 个 tick = 31.25ms ≈ 32fps（2026-11-07 本机实测）。
+        // 这条断言防止有人"顺手把 10 改回 16"，导致帧率悄悄腰斩。
+        assert!(super::FRAME_FAST_MS < 16);
+        assert!(super::FRAME_IDLE_MS >= 60);
+    }
+
+    #[test]
+    fn physics_dt_tracks_real_elapsed_and_caps_stalls() {
+        let d = super::physics_dt;
+        assert!((d(1000, 1015) - 0.015).abs() < 1e-6, "正常 15.6ms 帧");
+        assert!((d(1000, 1031) - 0.031).abs() < 1e-6, "抖动 31ms 帧不应被当成 16ms");
+        assert!((d(1000, 5000) - 0.033).abs() < 1e-6, "休眠唤醒要夹住");
+        assert_eq!(d(1000, 1000), 0.0);
     }
 
     #[test]
