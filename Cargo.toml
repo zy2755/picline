@@ -1,0 +1,29 @@
+[package]
+name = "picline-core"
+version = "0.1.1"
+edition = "2021"
+description = "图墙 PicLine —— 纯 Win32/GDI+ 自绘的 Rust 重写版"
+license = "MIT"
+build = "build.rs"
+
+# 零外部依赖：不引入 serde / image / windows-rs，
+# 避免编解码与运行时库带来的常驻内存，也避免构建期联网。
+
+[[bin]]
+name = "picline-core"
+path = "src/main.rs"
+
+[[bin]]
+name = "memtree"
+path = "src/bin/memtree.rs"
+
+[[bin]]
+name = "gesture"
+path = "src/bin/gesture.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

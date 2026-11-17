@@ -1,173 +1,174 @@
 # 图墙 · PicLine
 
-**截图,晾起来。**
+**截图，晾起来。**
 
-把每一张截图挂到屏幕顶端的晾衣绳上——指针在屏幕顶边一停,绳就滑下来;移开,它就收走。
-Windows 版,创意与行为规格来自 Alejandro Buján 的 macOS 应用
-[Tendedero](https://github.com/alejandrobujan/tendedero)(MIT)。
-按其 LICENSE 要求,本项目使用自己的名字与图标(图标由 `scripts/make-icon.js` 代码绘制)。
+按下 `Win+Shift+S` 截完，图不会落到桌面，而是夹到屏幕顶端的一根晾衣绳上。
+指针往上一搭，绳子带着一排玻璃相框滑下来；单击复制、拖进聊天框、拖进文件夹；
+不要了松手扔进回收站。平时它只是屏幕边缘的一条细线，不挡任何东西。
 
-![图标](assets/icon-256.png)
+Windows 10 22H2+ / 11 · x64 · 单文件 **632 KB** · 常驻 **32 MB / 1 进程** · MIT
 
-![图墙演示:指针移到屏幕顶边,晾衣绳滑下来;悬停相片出现 ✕;单击复制到剪贴板;移开后收起](docs/demo.gif)
+**[下载](#下载)** · **[手势一览](#手势)** · **[它不是什么](#它不是什么)**
 
-## 它能做什么
+| 单文件 | 常驻内存 | 进程 | 落盘 → 上墙 |
+| :---: | :---: | :---: | :---: |
+| **632 KB** | **32 MB** | **1** | **0.55 s** |
 
-| 手势 | 效果 |
+![图墙演示：指针移到屏幕顶边，晾衣绳滑下来，一排截图相框展开；单击相片复制到剪贴板，移开后自动收起](docs/demo.gif)
+
+> 不套 Electron，不依赖 .NET、WebView2 或任何运行时——Rust + 纯 Win32/GDI+ 静态链接，
+> 下载解压双击就能跑。作为对照，上一代 Electron 版实测 **416 MB / 6 进程**。
+
+### 为什么值得装
+
+- **截图不再变成文件。** 截完即上墙，桌面和「下载」文件夹里不再堆满
+  `截图 2026-11-17 090411.png`。只有你主动拖出去的那张才会落地。
+- **一条 210 px 的横带，却几乎不占地方。** 空白区域点击穿透，鼠标、滚轮、拖拽
+  全部落到底下的窗口；窗口不抢焦点，不会打断你正在输入的地方。
+- **用完就丢，不用整理。** 单击＝复制图片 + 文件；拖出＝发一份副本，原件还在绳上；
+  拖进回收站＝删除。中间没有「归档」「整理」这一步。
+- **不联网，没有账号，没有统计。** 数据全在 `%APPDATA%\图墙`，卸载也不删。
+
+## 下载
+
+| 文件 | 大小 | 说明 |
+| --- | ---: | --- |
+| [`PicLine-0.1.1-win-x64-portable.exe`](https://github.com/zy2755/picline/releases/latest) | 632 KB | 免安装单文件，双击即用，适合放 U 盘 |
+| [`PicLine-0.1.1-win-x64-setup.exe`](https://github.com/zy2755/picline/releases/latest) | 550 KB | 安装版：可选目录，建桌面 / 开始菜单快捷方式 |
+| [`PicLine-0.1.1-win-x64-portable.zip`](https://github.com/zy2755/picline/releases/latest) | 151 KB | 便携版压缩包，解压即用 |
+
+- 未签名，首次运行 SmartScreen 会提示「Windows 已保护你的电脑」→ 点「更多信息」→「仍要运行」。
+  校验值随 Release 附 `SHA256SUMS.txt`，可自行核对。
+- 认准**本仓库的 Release 直链**。网上有同名的其他截图软件，与本项目没有关系。
+- 卸载不会删除 `%APPDATA%\图墙`（你的截图还在），需要彻底清理请手动删除该目录。
+
+## 它不是什么
+
+它**不是** Snipaste 那类「贴图工具」，也不打算做成截图全家桶：不做截图界面、
+不做 OCR、不做长截图、不做录屏、不做标注编辑器。
+
+它只解决一件事——**截图出现之后的那几十秒**：想用的时候一伸手就有，不用的时候看不见。
+标注交给系统自带的画图（长按相片直接打开）；需要深度编辑，Snipaste / PixPin 更合适；
+需要把截图长期归档，资源管理器更合适。
+
+## 手势
+
+| 操作 | 效果 |
 | --- | --- |
-| 鼠标停靠屏幕顶边(中部约 56% 区域)0.25 秒 | 晾衣绳滑下 |
-| 指针离开窗口 | 收起 |
-| **单击** 相片 | 复制到剪贴板 |
-| **双击** | 用系统照片查看器打开 |
-| **长按** 0.45 秒 | 用画图编辑 |
-| **拖出** 到应用 | 发送一份副本,相片留在绳上 |
-| **拖出** 到文件夹 | 保存一份,相片留在绳上 |
-| 右键 | 复制 / 画图编辑 / 打开 / 另存为 / 取下并保存到截图文件夹 / 删除 |
+| 鼠标停靠屏幕顶边（中部约 56% 区域）0.25 秒 | 晾衣绳滑下 |
+| 指针离开窗口 | 自动收起 |
+| **单击** 相片 | 复制到剪贴板（图片 + 文件同时写入） |
+| **双击** 相片 | 用系统照片查看器打开 |
+| **长按** 0.45 秒 | 用画图（mspaint）编辑 |
+| **拖出** 到应用 | 发送一份副本，相片留在绳上 |
+| **拖出** 到文件夹 | 保存一份，相片留在绳上 |
+| **右键** | 复制 / 画图编辑 / 打开 / 另存为 / 取下并保存到截图文件夹 / 删除 |
 | 点 **✕** 或拖到回收站 | 移入回收站 |
-| `Ctrl+Alt+T` | 显示 / 收起晾衣绳 |
+| `Ctrl+Alt+T` | 手动显示 / 收起晾衣绳 |
+| 托盘图标 | 开关两条截图通道、开机自启、打开收件箱 |
 
-新截图到手的一瞬间就挂上绳,不需要等任何缩略图。
-
-### 空白处不挡路
-
-晾衣绳虽然是一条横跨屏幕顶边、210px 高的窗口,但**只有相片本身会接收鼠标**:
-指针在空白处时窗口是穿透的,点击、滚轮、拖拽都直接落到底下的窗口。
-以前这一整条会把屏幕顶边占死,现在不会了(实现:`main.js` 的 `captureMouse` /
-`passThrough` + `src/line.js` 上报的可交互矩形)。
-
+新截图到手的一瞬间就挂上绳，不用等任何缩略图弹窗。
 
 ## 截图从哪来
 
-两条通道,自动去重:
+两条通道，自动去重：
 
-1. **截图文件夹**(默认开启):监视 `图片\Screenshots`(`Win+Shift+S`、`Win+PrintScreen`
-   的落盘处)。新截图随即移入图墙的收件箱(`%APPDATA%\图墙\inbox`),
-   文件夹不再堆积;在绳上"取下并保存"会放回 `图片\Screenshots`。
-2. **剪贴板**(默认开启):捕捉不落盘的截图(关闭"自动保存原始屏幕截图"时的
-   `Win+Shift+S`、各类工具的"复制到剪贴板")。
+1. **截图文件夹**（默认开启）：监视 `图片\Screenshots`（`Win+Shift+S`、`Win+PrintScreen`
+   的落盘处）。新截图随即移入图墙的收件箱 `%APPDATA%\图墙\inbox`，原文件夹不再堆积；
+   在绳上「取下并保存」会放回 `图片\Screenshots`。
+2. **剪贴板**（默认开启）：捕捉不落盘的截图（关闭「自动保存原始屏幕截图」时的
+   `Win+Shift+S`、各类工具的「复制到剪贴板」）。
 
-只认启动之后的新内容:已有的历史截图、云盘同步、复制图片等动作都不会被误收;
-自己"单击复制"的图也不会被再挂一次。同一张图两条通道同时到达时只挂一次,
-且保留原始文件画质。
+只认**启动之后**的新内容：历史截图、云盘同步、复制图片都不会被误收；自己「单击复制」
+的图也不会被再挂一次。同一张图两条通道同时到达时只挂一次，并保留原始文件画质。
 
-托盘图标可随时开关这两条通道、设置开机自启、打开收件箱。
+## 安全区与穿透
 
-## 安全区
-
-- 全屏应用在前台时,晾衣绳自动藏起,不会挡游戏或放映。
-- 窗口不抢焦点:悬停、点击晾衣绳不会打断你正在输入的地方。
-
-## 运行
-
-需要 Node.js 18+(开发时使用 Node 24 与 Electron 33)。
-
-```bash
-git clone <this-repo>
-cd 图墙
-npm install
-npm start
-```
-
-重新生成图标(可选):`npm run icon`。
-
-### 下载安装
-
-不想碰命令行就直接下现成的:**[Releases](https://github.com/zy2755/picline/releases)**
-
-| 文件 | 说明 |
-| --- | --- |
-| `PicLine-0.1.1-win-x64-setup.exe` | 安装版,可选安装目录,建桌面/开始菜单快捷方式 |
-| `PicLine-0.1.1-win-x64-portable.exe` | 免安装单文件,双击即用,适合放U盘 |
-
-均为 Windows x64、未签名(首次运行 SmartScreen 可能提示"仍要运行")。
-
-### 自己构建
-
-```bash
-npm install
-npm run build        # = npm run ico + electron-builder --win --x64
-```
-
-产物在 `dist/`:NSIS 安装包 + 便携版 exe。
-
-`npm run icon` 重新绘制 PNG 图标,`npm run ico` 把它们打包成多尺寸 `assets/icon.ico`
-(安装包图标用它)。electron-builder 配置全在 `package.json` 的 `build` 字段里。
-
-> 这里刻意关了 asar(`"asar": false`):全屏检测要靠独立 PowerShell 进程读
-> `lib/fullscreen.ps1`,而 asar 归档外部进程读不了。别顺手打开。
-
-## 项目结构
-
-| 文件 | 职责 |
-| --- | --- |
-| `main.js` | 多显示器晾衣绳窗口、顶边悬停呼出/收起、鼠标命中与穿透、托盘、全局快捷键、IPC |
-| `lib/capture.js` | 截图捕获:文件夹监视 + 剪贴板轮询 + 视觉哈希去重 + 收件箱 |
-| `lib/fullscreen.js` `lib/fullscreen.ps1` | 前台窗口轮询(Win32),判定全屏并自动隐藏 |
-| `lib/paths.js` `lib/settings.js` | 收件箱/配置存储(`TQ_DATA_DIR` 可把数据目录指到别处,录制演示用) |
-| `src/line.html` `src/line.css` `src/line.js` | 晾衣绳 UI:绳、衣夹、玻璃相框、物理摆动、手势、可交互区域上报 |
-| `scripts/make-icon.js` | 代码绘制应用图标(SDF + 超采样) |
-| `scripts/make-ico.js` | 把 PNG 打包成多尺寸 `assets/icon.ico`(安装包图标) |
-| `scripts/test-flow.ps1` | 交互流程自动化测试(悬停/复制/删除/收起) |
-| `scripts/cdp-test.js` | 通过 CDP 驱动真实 UI 的 discard 测试 |
-| `scripts/mem-probe.sh` | 内存取样:跑一次应用,把各进程内存写盘(靠 `TQ_MEMPROBE`) |
-| `scripts/make-demo-gif.sh` | 一键录制 README 顶部的演示 GIF(见下) |
-
-### 演示 GIF 怎么来的
-
-```bash
-bash scripts/make-demo-gif.sh          # 输出 docs/demo.gif
-```
-
-它会起一块渐变"舞台"窗口当背景(`scripts/demo-backdrop.js`,故意少 8px 高,
-否则会被自家的全屏检测判成全屏),往临时收件箱塞几张代码生成的假截图
-(`scripts/make-demo-photos.js`),然后用真实光标走一遍
-`顶边悬停 → 悬停相片 → 单击复制 → 移开收起`,逐帧截屏
-(`scripts/record-demo.py`,纯 ctypes 调 GDI),最后 ffmpeg 合成调色板优化的 GIF。
-全程不碰你真实的收件箱、壁纸和桌面。
+- **全屏应用在前台时自动隐藏**，不会挡游戏、放映或远程会议。
+- **不抢焦点**：悬停、点击晾衣绳都不会把你正在输入的窗口顶掉。
+- **空白穿透**：这条横跨屏幕顶部、210 px 高的窗口，只有相片本身接收鼠标；
+  指针在空白处时窗口是穿透的，点击、滚轮、拖拽全部落到底下的窗口。
+- **跨会话保留**：重启后相片仍挂在绳上，直到你取下或删除。
 
 ## 资源占用
 
-Electron 应用的天然开销,能做到的优化都做了:
+口径统一为**整棵进程树**（`scripts/compare-mem.sh` + `memtree.exe`，每 250 ms 采
+`PROCESS_MEMORY_COUNTERS_EX` 的工作集 / 峰值 / 私有提交）：
 
-| 配置 | 进程数 | 内存(工作集合计) |
-| --- | --- | --- |
-| 默认 | 4 | 468 MB |
-| `--disable-gpu` | 4 | 456 MB |
-| `--in-process-gpu` | 3 | 384 MB |
-| **`--in-process-gpu` + 关硬件加速(现在的默认)** | **3** | **373 MB** |
+| 场景 | Electron v0.1.1 | 本项目（Rust / Win32 + GDI+） | 降幅 |
+| --- | ---: | ---: | ---: |
+| S0 收起态、空收件箱 | 416.2 MB / 6 进程 | **32.1 MB / 1 进程** | 92.3% |
+| S1 挂 10 张 1920×1080 | 505.0 MB / 6 进程 | **33.6 MB / 1 进程** | 93.3% |
+| 峰值工作集 | 484.4 / 600.1 MB | **35.2 / 36.7 MB** | 92.7% / 93.9% |
 
-- 界面只有 CSS/SVG 动画和几张缩略图,不需要硬件合成,所以把 GPU 进程并进主进程、
-  关掉硬件加速(`main.js` 开头两行),透明窗口和阴影不受影响。
-- 收起状态下渲染进程的 `requestAnimationFrame` 与微风逻辑都会停掉,只留主进程
-  60ms 一次的光标轮询(它本来就要轮询顶边悬停)。
-- 数据全是本机文件,没有网络请求,也就没有网络进程的额外开销。
+其他实测值：截图落盘 → 挂上绳 **552 ms**（原版理论下限约 600 ms）；展开动画
+**62–66 fps**（中位 63）；60 分钟长稳采样，句柄 525、线程 14 恒定，无泄漏。
 
-复现:`bash scripts/mem-probe.sh base`(可选参数会原样传给 Electron,例如
-`bash scripts/mem-probe.sh nogpu --disable-gpu`)。
+> 说明：长时间运行并调用过系统文件对话框后，工作集会上到 60 MB 左右并保持平稳
+> （Windows Shell 扩展加载后常驻），这是系统行为，不是泄漏。
 
+## 运行环境
 
-### 从原版移植的参数
+- Windows 10 22H2 / Windows 11，x64。
+- 无需安装任何运行时（不依赖 .NET、VC++ 运行库、WebView2、Node.js）。
+- 配置与收件箱：`%APPDATA%\图墙`。单实例运行，重复启动会唤出已有实例。
 
-- 顶边悬停 250ms 呼出、新截图探头展示 2.5s、长按 0.45s
-- 相框宽 150 / 照片高 104 / 间距 174 / 面板高 210 / 绳垂度 `min(30, w×0.018)`
-- 每张相片随机静置倾角 ±2.5°,微风轻拂 1.6–3.4°(随机延迟 0–0.35s)
-- 呼出 spring(0.42, 0.82)、收起 easeIn 0.22s(渲染端以 CSS/阻尼弹簧近似)
+## 自己构建
 
-## 与 macOS 原版的差异
+只依赖 Rust（msvc target）+ Windows SDK（`rc.exe`）+ NSIS（打安装包用）。
+`Cargo.toml` 里**零外部 crate**，不联网也能构建。
 
-- **呼出区域**:原版是菜单栏中部三分之一;Windows 没有菜单栏,取顶边中部
-  约 56%(避开最大化窗口左上/右上的控制按钮)。
-- **"接管截图"**:macOS 版可改写系统截图设置(关闭浮窗、改存自家文件夹)并在退出时还原;
-  Windows 的截图工具(Snipping Tool)不暴露这些设置,改为"监视 + 移入收件箱"。
-  剪贴板通知横幅无法隐藏,属系统限制。
-- **标注**:原版打开系统 Markup;Windows 对应为画图(mspaint)。
-- 晾衣绳跨会话保留:收件箱里的图在下次启动时仍挂在绳上,直到你取下或删除。
+```bash
+cargo build --release        # → target/release/picline-core.exe
+bash scripts/build-dist.sh   # → dist/ 安装包 + 便携版 + SHA256SUMS
+```
+
+`scripts/` 下还有：`compare-mem.sh`（双版本内存对照）、`make-test-photos.js`
+（生成测试图）、`verify-install.py`（分发物验收）。
+
+## 与 macOS 原版的关系
+
+创意与交互规格来自 Alejandro Buján 的 macOS 应用
+[Tendedero](https://github.com/alejandrobujan/tendedero)：把截图挂在屏幕顶部的晾衣绳上。
+按其 MIT LICENSE 要求，本项目使用自己的名字与图标，不沿用原作的名称与视觉资产。
+
+Windows 上没有菜单栏，呼出区域改为顶边中部约 56%（避开最大化窗口的按钮）；
+系统截图工具不暴露「关闭浮窗 / 改存目录」这类设置，改为**监视 + 移入收件箱**；
+原版的系统 Markup 标注在 Windows 上对应为画图。
+
+Windows 平台另有几个同创意的社区移植（Snapline、PicRope / 图绳、Pegline 等）。
+本项目不做功能竞赛，只把「轻」做到极致：不依赖任何运行时，一个 632 KB 的文件跑完所有事。
+
+## 已知限制
+
+- 仅 Windows x64；多显示器与混合 DPI 场景只在单屏 + 150% 缩放下完整验证过。
+- 未签名，SmartScreen 与部分安全软件可能提示（可自行校验 SHA256）。
+- 不提供截图界面，截图请用 `Win+Shift+S` / `Win+PrintScreen` / 第三方工具。
+- 标注走系统画图，不是内置编辑器。
 
 ## 隐私
 
-无账号、无网络请求、无统计。所有数据都在本机 `%APPDATA%\图墙`。
+无账号、无网络请求、无统计上报。所有数据都是本机文件。
 
 ## 许可
 
-代码以 MIT 发布(见 LICENSE)。名称"图墙"与本项目的图标不包含在该许可内。
-Tendedero 的名称与图标归其作者所有。
+代码以 MIT 发布（见 `LICENSE`）。「图墙」名称与本项目图标不在该许可范围内。
+Tendedero 的名称与图标归其作者 Alejandro Buján 所有。
+
+## English
+
+**PicLine** hangs your screenshots on a clothesline at the top of the screen. Press
+`Win+Shift+S`, and the shot is pegged up instead of dumped on your desktop. Move the
+cursor to the top edge and the line slides down; click to copy, drag into any app, drop
+into a folder to save, drop on the recycle bin to throw away.
+
+Native Rust + Win32/GDI+, no Electron, no .NET, no WebView2 — a single **632 KB** exe
+with **~32 MB** RAM in **one** process (the previous Electron build measured 416 MB
+across 6 processes). MIT licensed, fully offline, no telemetry.
+
+Windows 10 22H2+ / 11, x64. Download from [Releases](https://github.com/zy2755/picline/releases/latest).
+
+---
+
+创意致敬 [Tendedero](https://github.com/alejandrobujan/tendedero)。验收与实测记录见
+[`ACCEPTANCE.md`](ACCEPTANCE.md)。
