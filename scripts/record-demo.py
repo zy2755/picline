@@ -60,6 +60,9 @@ X0 = max(0, (SW - CW) // 2)
 Y0 = 0
 
 PANEL_H = int(210 * SF)  # 图墙面板的物理高度，和 gui.rs 的 PANEL_H * sf 对齐
+# 成片只保留顶部这一条：相片 + 绳 + toast（逻辑 y=176..200 → 物理 264..300）都在 380 以内。
+# 全抓 675 高再缩到 800x450 的话，下面 400px 全是空桌面，GIF 一半体积浪费在渐变上。
+CROP_H = 380
 
 # 与 gui.rs 保持一致（改那边记得同步这几个数）
 CARD_W, CARD_H, SPACING, ROPE_TOP, EDGE_PAD = 150.0, 131.0, 174.0, 10.0, 24.0
@@ -367,6 +370,12 @@ def fence(x, y):
     return x, y
 
 
+def to_screen(x, y):
+    """抓取坐标(Capturer 的像素) → 屏幕物理坐标。相片坐标全是抓取坐标，
+    直接把 (208,172) 当屏幕坐标用，光标会跑到屏幕左边 680px 外的地方 —— 单击就点到别人窗口上了。"""
+    return int(x) + X0, int(y) + Y0
+
+
 def move(x, y):
     fence(x, y)
     user32.SetCursorPos(int(x), int(y))
@@ -398,14 +407,15 @@ def click(x, y, cap=None):
         if q < 0 or q + 3 >= len(f) or f[q] + f[q + 1] + f[q + 2] < 500:
             log("跳过单击：(%d,%d) 处没看到相框" % (x, y))
             return False
-    user32.SetCursorPos(int(x), int(y))
+    sx, sy = to_screen(x, y)
+    user32.SetCursorPos(sx, sy)
     time.sleep(0.05)
     # 回读一次：远程桌面/远控客户端会持续把光标钉在它自己那边，
     # 这时 SetCursorPos 看着成功、实际位置已经被改掉 —— 按下去就点到别人窗口上了。
     now = wt.POINT()
     user32.GetCursorPos(ctypes.byref(now))
-    if abs(now.x - int(x)) > 2 or abs(now.y - int(y)) > 2:
-        log("跳过单击：光标没停在目标点（现在 %d,%d，期望 %d,%d）" % (now.x, now.y, x, y))
+    if abs(now.x - sx) > 2 or abs(now.y - sy) > 2:
+        log("跳过单击：光标没停在目标点（现在 %d,%d，期望 %d,%d）" % (now.x, now.y, sx, sy))
         return False
     user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     time.sleep(0.04)
@@ -552,7 +562,11 @@ def record(exe, out_gif, probe=False):
             log("探针帧 ->", png)
             return
 
+        keep_mid = "--keep-mid" in sys.argv
         mid = os.path.join(tmp, "mid.mkv")
+        if keep_mid:
+            os.makedirs("target", exist_ok=True)
+            mid = os.path.abspath("target/demo-mid.mkv")
         ff = subprocess.Popen(
             ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "bgra",
              "-s", "%dx%d" % (CW, CH), "-r", "15", "-i", "-",
@@ -560,18 +574,23 @@ def record(exe, out_gif, probe=False):
             stdin=subprocess.PIPE)
 
         # 时间线：起点已展开 → 悬停相片 → 单击复制 → 移开收起 → 顶边呼出
+        # 节奏按「看的人不熟这个软件」来定：每步之间留 1s 以上，
+        # 否则 5 秒跑完四个动作，观众还没认出这是截图就结束了。
         cx = (cards[0][0] + cards[-1][0]) // 2
+        c1x, c1y = cards[0]
         c2x, c2y = cards[min(1, len(cards) - 1)]
         c3x, c3y = cards[min(2, len(cards) - 1)]
+        # 相片三组坐标都是抓取坐标，注入前必须 to_screen()；cy 是相片中心，y 直接用即可。
         script = [
-            (0.00, lambda: move(c2x, c2y)),
-            (0.90, lambda: move(c3x, c3y)),
-            (1.55, lambda: click(c3x, c3y, cap)),
-            (2.45, lambda: move(cx, CH - 60)),
-            (3.55, lambda: move(cx, 1)),
-            (4.60, lambda: None),
+            (0.30, lambda: move(*to_screen(c1x, c1y))),
+            (1.05, lambda: move(*to_screen(c3x, c3y))),
+            (2.20, lambda: click(c3x, c3y, cap)),
+            (3.60, lambda: move(*to_screen(cx, CROP_H + 80))),  # 往下走出画面 → 绳子收起
+            (5.20, lambda: move(*to_screen(cx, 1))),            # 回到屏幕顶边 → 再滑出来
+            (6.90, lambda: move(*to_screen(c2x, c2y))),
+            (8.00, lambda: None),
         ]
-        DURATION = 5.2
+        DURATION = 8.5
         n = 0
         start = time.perf_counter()
         idx = 0
@@ -594,12 +613,14 @@ def record(exe, out_gif, probe=False):
         ff.wait()
 
         os.makedirs(os.path.dirname(os.path.abspath(out_gif)), exist_ok=True)
+        # 编码档位是量过的：15fps/192色/抖动 1.40MB，12fps/160色/无抖动 0.95MB，
+        # 800px 宽下肉眼分不出差别，README 首屏值得省这 450KB。
+        vf = ("fps=12,crop=%d:%d:0:0,scale=800:-2:flags=lanczos,split[a][b];" % (CW, CROP_H)
+              + "[a]palettegen=max_colors=160:stats_mode=diff[p];"
+              + "[b][p]paletteuse=dither=none:diff_mode=rectangle")
         subprocess.run(
             ["ffmpeg", "-y", "-v", "error", "-i", mid,
-             "-filter_complex",
-             "fps=15,scale=800:450:flags=lanczos,split[a][b];"
-             "[a]palettegen=max_colors=192:stats_mode=diff[p];"
-             "[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle",
+             "-filter_complex", vf,
              "-loop", "0", out_gif], check=True)
         size = os.path.getsize(out_gif)
         log("GIF -> %s  %.0f KB" % (out_gif, size / 1024))
