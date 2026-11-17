@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "zy2755"
             VALUE "FileDescription", "图墙 - 截图晾衣绳"
-            VALUE "FileVersion", "0.1.1"
+            VALUE "FileVersion", "@VERSION@"
             VALUE "InternalName", "picline-core"
             VALUE "LegalCopyright", "MIT Licensed · inspired by Tendedero"
             VALUE "OriginalFilename", "picline-core.exe"
             VALUE "ProductName", "图墙"
-            VALUE "ProductVersion", "0.1.1"
+            VALUE "ProductVersion", "@VERSION@"
         END
     END
     BLOCK "VarFileInfo"

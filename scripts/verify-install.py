@@ -19,6 +19,7 @@ import ctypes
 import ctypes.wintypes as w
 import glob
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -32,7 +33,15 @@ DIST = os.path.join(ROOT, "dist")
 REPORT = os.path.join(ROOT, "target", "dist-verify", "report.json")
 UNINST_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PicLineRust"
 APP_KEY = r"Software\PicLineRust"
-VERSION = "0.1.1"
+def _version():
+    """版本号只认 Cargo.toml，避免每次发版改两处。"""
+    import re
+    src = io.open(os.path.join(ROOT, "Cargo.toml"), encoding="utf-8").read()
+    m = re.search(r'^version\s*=\s*"([^"]+)"', src, re.M)
+    return m.group(1) if m else "0.0.0"
+
+
+VERSION = _version()
 
 
 def results_holder():

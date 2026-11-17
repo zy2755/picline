@@ -17,7 +17,7 @@
 ;   SRCEXE=<绝对路径>  要打包的 picline-core.exe（必须已内嵌图标/版本资源）
 ;   OUTFILE=<绝对路径> 生成的 setup.exe
 ;   APP_ICON=<绝对路径> assets/icon.ico，用作安装器与卸载器图标
-;   APP_VERSION=0.1.1
+;   APP_VERSION=0.1.2
 ;   TQ_TEST_INSTALL=1  仅验收用：快捷方式重定向到 $INSTDIR\_testshortcuts，
 ;                      且不启用「完成页运行图墙」，静默安装/卸载零桌面副作用
 ; ============================================================================
@@ -25,7 +25,7 @@
 Unicode true
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.1.1"
+  !define APP_VERSION "0.1.2"
 !endif
 !define APP_NAME "图墙"
 !define APP_EXE "picline-core.exe"

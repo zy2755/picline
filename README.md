@@ -33,9 +33,9 @@ Windows 10 22H2+ / 11 · x64 · 单文件 **632 KB** · 常驻 **32 MB / 1 进�
 
 | 文件 | 大小 | 说明 |
 | --- | ---: | --- |
-| [`PicLine-0.1.1-win-x64-portable.exe`](https://github.com/zy2755/picline/releases/latest) | 632 KB | 免安装单文件，双击即用，适合放 U 盘 |
-| [`PicLine-0.1.1-win-x64-setup.exe`](https://github.com/zy2755/picline/releases/latest) | 550 KB | 安装版：可选目录，建桌面 / 开始菜单快捷方式 |
-| [`PicLine-0.1.1-win-x64-portable.zip`](https://github.com/zy2755/picline/releases/latest) | 151 KB | 便携版压缩包，解压即用 |
+| [`PicLine-0.1.2-win-x64-portable.exe`](https://github.com/zy2755/picline/releases/latest) | 632 KB | 免安装单文件，双击即用，适合放 U 盘 |
+| [`PicLine-0.1.2-win-x64-setup.exe`](https://github.com/zy2755/picline/releases/latest) | 550 KB | 安装版：可选目录，建桌面 / 开始菜单快捷方式 |
+| [`PicLine-0.1.2-win-x64-portable.zip`](https://github.com/zy2755/picline/releases/latest) | 151 KB | 便携版压缩包，解压即用 |
 
 - 未签名，首次运行 SmartScreen 会提示「Windows 已保护你的电脑」→ 点「更多信息」→「仍要运行」。
   校验值随 Release 附 `SHA256SUMS.txt`，可自行核对。

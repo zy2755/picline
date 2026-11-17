@@ -1846,7 +1846,10 @@ fn handle_command(id: u16) {
         }
         ID_AUTOSTART => set_autostart(!autostart_enabled()),
         ID_ABOUT => {
-            let text = wide("图墙 v0.1.1\n\n截图,晾起来。\n\n灵感来自 Alejandro Buján 的 Tendedero(macOS)。\n本作品为其 Windows 移植,代码以 MIT 许可发布。");
+            let text = wide(&format!(
+                "图墙 v{}\n\n截图,晾起来。\n\n灵感来自 Alejandro Buján 的 Tendedero(macOS)。\n本作品为其 Windows 移植,代码以 MIT 许可发布。",
+                env!("CARGO_PKG_VERSION")
+            ));
             let cap = wide("关于 图墙");
             unsafe { MessageBoxW(0, text.as_ptr(), cap.as_ptr(), MB_ICONINFORMATION | MB_OK) };
         }

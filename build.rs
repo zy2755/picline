@@ -49,8 +49,12 @@ fn main() {
 
     // rc.exe 对路径中的反斜杠敏感，统一转正斜杠并用绝对路径
     let icon_abs = icon.to_string_lossy().replace('\\', "/");
+    // 版本号只认 Cargo.toml（= 唯一事实来源），.rc 里写 @VERSION@ 占位
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string());
     let text = match fs::read_to_string(&template) {
-        Ok(s) => s.replace("@ICON_PATH@", &icon_abs),
+        Ok(s) => s
+            .replace("@ICON_PATH@", &icon_abs)
+            .replace("@VERSION@", &version),
         Err(e) => {
             println!("cargo:warning=读取 {template:?} 失败：{e}");
             return;
