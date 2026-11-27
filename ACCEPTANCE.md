@@ -866,3 +866,27 @@ portable `8bbff8633fcef836615c1d09201163573c410371811c139e1ad625bd4c9cc249`、
 setup `43fc3ff154dac0512e5c08690d18154299d45463015f66c984fc5569980f218e`、
 zip `b33bf074c3d4a039070109f05b26a1f2fff0b16bcdf8522287e8fe9e44a10b12`。
 已部署 `%LOCALAPPDATA%\Programs\图墙\picline-core.exe`，与 release 逐字节一致。
+
+#### 8.17 v0.1.3 发版（2026-11-28）
+
+把 8.12–8.16 这一批改动（静止不空转、画布复用与资源缓存、✕ 热区、
+贴底元素回弹钉住、四项设置、超出角标，以及红蓝通道错序与圆角接缝两个渲染缺陷的修复）
+正式收成一个版本。版本号仍是单源：`Cargo.toml` 一处，打包脚本 / 安装器资源 /
+验证脚本都读它。
+
+**产物**（`scripts/build-dist.sh`，`FileVersion`/`ProductVersion` 均为 0.1.3）
+
+| 产物 | 大小 | SHA256 |
+| --- | --- | --- |
+| `PicLine-0.1.3-win-x64-portable.exe` | 653,312 B（638 KB） | `6226ab37bc85cd8d11ae0dd5908fb7567af6d2720c8790f8ffaa065d567a6554` |
+| `PicLine-0.1.3-win-x64-setup.exe` | 566,374 B（553 KB） | `1083ddbf97dff309ee2cd3acaf22aab421b79f5cf3f69aee91be3ef53915bb42` |
+| `PicLine-0.1.3-win-x64-portable.zip` | 157,483 B（154 KB） | `89d030b4518d6eb29ffe9ccadf52f08fc9ece93384701bb590d0e1c728067f4a` |
+
+portable 与 `target/release/picline-core.exe` 逐字节一致；已部署到
+`%LOCALAPPDATA%\Programs\图墙\picline-core.exe`（同哈希）。
+
+**同步更新的引用**：`README.md` 三行下载表、`docs/index.html`
+（两个下载链接、`ver-note`、SHA256 段与哈希）、`scripts/record-demo.py` 里写死的便携版文件名。
+落地页另有 JS 会自动跟随 `releases/latest`，静态值只是无 JS 时的兜底。
+
+`cargo test` 54/54、release 零警告。git tag `v0.1.3`，GitHub Release 附三件套 + `SHA256SUMS.txt`。

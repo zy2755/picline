@@ -648,7 +648,7 @@ def main():
     args = sys.argv[1:]
     probe = "--probe" in args
     exe = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "dist", "PicLine-0.1.2-win-x64-portable.exe")
+                       "dist", "PicLine-0.1.3-win-x64-portable.exe")
     if "--exe" in args:
         exe = args[args.index("--exe") + 1]
     if not os.path.isfile(exe):

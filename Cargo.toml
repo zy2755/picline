@@ -1,6 +1,6 @@
 [package]
 name = "picline-core"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "图墙 PicLine —— 纯 Win32/GDI+ 自绘的 Rust 重写版"
 license = "MIT"
