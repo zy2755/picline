@@ -5,6 +5,11 @@
 //!   - load() = {...DEFAULTS, ...JSON.parse(file)}；读失败静默回落到 DEFAULTS
 //!   - save(patch) 合并后以 JSON.stringify(cache, null, 2) 写回；写失败静默吞掉
 //!   - 未知键会被 spread 保留并原样写回（这点很容易被重写漏掉，这里显式保留）
+//!
+//! 2026-11-27 新增 `showHint`（底部操作提示是否显示，默认 true）、
+//! `wind`（微风 0 关 / 1 轻 / 2 标准，默认 2）、`anim`（弹出收起动画，默认 true）。
+//! 这三个都是原 JS 版没有的键：老配置里不存在时按默认值处理，
+//! 写回时会补上，老版本读新配置也只会把它们当未知键原样保留 —— 双向兼容。
 
 use std::fs;
 use std::path::Path;
@@ -12,6 +17,12 @@ use std::path::Path;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub show_line: bool,
+    /// 底部「点击复制 · 双击打开 …」提示条是否显示（托盘可切，写回 config.json）
+    pub show_hint: bool,
+    /// 微风强度：0 = 关（画面完全静止）、1 = 轻、2 = 标准。越界按边界夹紧
+    pub wind: i64,
+    /// 弹出 / 收起动画（false 时瞬间到位，给晕动敏感或追求极快的人）
+    pub anim: bool,
     pub take_over: bool,
     pub clipboard_watch: bool,
     pub max_pegs: i64,
@@ -24,6 +35,9 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             show_line: true,
+            show_hint: true,
+            wind: 2,
+            anim: true,
             take_over: true,
             clipboard_watch: true,
             max_pegs: 10,
@@ -200,6 +214,13 @@ impl Settings {
         for (k, raw) in scan_object(text) {
             match k.as_str() {
                 "showLine" => s.show_line = raw == "true",
+                "showHint" => s.show_hint = raw == "true",
+                "wind" => {
+                    if let Ok(n) = raw.parse::<i64>() {
+                        s.wind = n.clamp(0, 2);
+                    }
+                }
+                "anim" => s.anim = raw == "true",
                 "takeOver" => s.take_over = raw == "true",
                 "clipboardWatch" => s.clipboard_watch = raw == "true",
                 "maxPegs" => {
@@ -218,6 +239,9 @@ impl Settings {
     pub fn to_json(&self) -> String {
         let mut pairs: Vec<(String, String)> = vec![
             ("showLine".into(), self.show_line.to_string()),
+            ("showHint".into(), self.show_hint.to_string()),
+            ("wind".into(), self.wind.to_string()),
+            ("anim".into(), self.anim.to_string()),
             ("takeOver".into(), self.take_over.to_string()),
             ("clipboardWatch".into(), self.clipboard_watch.to_string()),
             ("maxPegs".into(), self.max_pegs.to_string()),
@@ -272,8 +296,41 @@ mod tests {
     fn defaults_match_js() {
         let s = Settings::default();
         assert!(s.show_line && s.take_over && s.clipboard_watch);
+        assert!(s.show_hint);
+        assert_eq!(s.wind, 2);
+        assert!(s.anim);
         assert_eq!(s.max_pegs, 10);
         assert!(!s.first_run_done);
+    }
+
+    #[test]
+    fn wind_and_anim_are_clamped_and_round_trip() {
+        // 缺键 -> 默认：风开在标准档、动画开
+        let d = Settings::parse(r#"{"maxPegs":10}"#);
+        assert_eq!((d.wind, d.anim), (2, true));
+        // 越界值夹紧，避免手改配置把风速写成 99 或 -3
+        assert_eq!(Settings::parse(r#"{"wind":9}"#).wind, 2);
+        assert_eq!(Settings::parse(r#"{"wind":-3}"#).wind, 0);
+        // 关微风 + 关动画都要能写回再读回
+        let s = Settings::parse(r#"{"wind":0,"anim":false}"#);
+        assert_eq!((s.wind, s.anim), (0, false));
+        let out = s.to_json();
+        assert!(out.contains("\"wind\": 0") && out.contains("\"anim\": false"));
+        let back = Settings::parse(&out);
+        assert_eq!((back.wind, back.anim), (0, false));
+    }
+
+    #[test]
+    fn hint_flag_defaults_on_and_round_trips() {
+        // 老配置里没有 showHint：按默认 true，不能变成立即隐藏
+        assert!(Settings::parse(r#"{"showLine":true}"#).show_hint);
+        // 显式关闭要生效
+        let s = Settings::parse(r#"{"showHint":false}"#);
+        assert!(!s.show_hint);
+        // 写回后仍能读回来（托盘切换依赖这条）
+        let out = s.to_json();
+        assert!(out.contains("\"showHint\": false"));
+        assert!(!Settings::parse(&out).show_hint);
     }
 
     #[test]
@@ -305,7 +362,7 @@ mod tests {
     fn formatting_matches_json_stringify_indent_2() {
         assert_eq!(
             Settings::default().to_json(),
-            "{\n  \"showLine\": true,\n  \"takeOver\": true,\n  \"clipboardWatch\": true,\n  \"maxPegs\": 10,\n  \"firstRunDone\": false\n}"
+            "{\n  \"showLine\": true,\n  \"showHint\": true,\n  \"wind\": 2,\n  \"anim\": true,\n  \"takeOver\": true,\n  \"clipboardWatch\": true,\n  \"maxPegs\": 10,\n  \"firstRunDone\": false\n}"
         );
     }
 }

@@ -50,6 +50,12 @@ const CROSS_TTL: i64 = 10_000;
 const FRAME_FAST_MS: u32 = 10;
 const FRAME_IDLE_MS: u32 = 60;
 
+// 弹簧阻尼（K=30 固定）：常态 2.6 保留微风摆动的余韵（τ≈0.77s）；
+// 悬停时切 6.2（τ≈0.32s），让相片约半秒内平滑停住。
+// 两者配合才有"鼠标停在相片上 → 画面静止 → 彻底不重绘"的效果。
+const SPRING_C: f32 = 2.6;
+const SPRING_C_HOVER: f32 = 6.2;
+
 // ---- 左下角操作提示（可调外观，2026-11-08 加固可读性）----
 // 原版是 11px / alpha 0x80 的深棕字**直接画在透明分层窗口上**，底下就是用户壁纸：
 // 壁纸一深就吞字，一浅又失去边缘，且 GDI+ 在透明位图上只能用灰度抗锯齿
@@ -67,6 +73,24 @@ const HINT_Y: f32 = PANEL_H - 27.0; // 胶囊 183..207，面板底 210 留 3px
 const HINT_H: f32 = 24.0;
 const HINT_PAD_X: f32 = 10.0;
 
+// ---- 右下角「另有 N 张」角标（2026-11-27）----
+// 截图数超过 maxPegs、或屏宽放不下时，多出来的相片**完全不会挂出来**，
+// 以前没有任何提示，很容易以为"图丢了"。这里在右下角给个计数。
+// 配色比提示条暖一档（沙色），避免和操作提示混成一条信息。
+const BADGE_BG: u32 = 0xE6_F6E7CE;
+const BADGE_INK: u32 = 0xFF_4A3A22;
+
+// ---- 相片右上角 ✕（移入回收站）----
+// 2026-11-18：原来是 18×18 视觉 + 18×18 命中，且中心正好压在卡片右边缘上。
+// 但 cursor_hits 只认卡片本体（到 cx+77），按钮伸到卡片外的那半（cx+77~84）
+// 会被判成"空白"→ 窗口恢复鼠标穿透、hover 也消失，实际可点区只剩
+// 与卡片相交的 11×11 小角，非常难点。现在：视觉 20×20 圆角贴片 +
+// 30×30 命中热区（同心，向外各扩 5px），并把热区并入 cursor_hits。
+// 热区右缘 cx+90 仍在相邻卡片左缘（cx+99）之内，不会互相抢点击。
+const XBTN_SIZE: f32 = 20.0; // 视觉边长
+const XBTN_HIT: f32 = 30.0;  // 命中热区边长
+const XBTN_R: f32 = 5.5;     // 圆角半径
+
 const ID_TOGGLE: u16 = 1;
 const ID_TAKEOVER: u16 = 2;
 const ID_CLIPWATCH: u16 = 3;
@@ -74,6 +98,15 @@ const ID_INBOX: u16 = 4;
 const ID_AUTOSTART: u16 = 5;
 const ID_ABOUT: u16 = 6;
 const ID_QUIT: u16 = 7;
+const ID_HINT: u16 = 8;
+const ID_ANIM: u16 = 9;
+/// 子菜单动态 id：100 + 张数、200 + 风档，避开固定项占用的 1~99
+const ID_MAX_BASE: u16 = 100;
+const ID_WIND_BASE: u16 = 200;
+/// 托盘里可选的相片张数（还要再受屏宽能放下多少张的限制）
+const MAX_PEG_CHOICES: [i64; 5] = [6, 8, 10, 12, 15];
+/// 微风档位：(值, 菜单文案)
+const WIND_CHOICES: [(i64, &str); 3] = [(0, "关（画面完全静止）"), (1, "轻"), (2, "标准")];
 
 /// 真机验收专用：让注入器能干净地结束 GUI（不改变正常退出路径）
 const WM_APP_QUIT: u32 = WM_APP + 2;
@@ -120,6 +153,8 @@ struct LineDisplay {
     h: i32,
     sf: f32,
     surface: Surface,
+    /// 整屏画布随显示器常驻，每帧只清空+复位变换（原来每帧新建 1.6~3.2MB 位图）
+    canvas: Option<gdi::Canvas>,
 }
 
 struct Peg {
@@ -185,6 +220,10 @@ struct App {
     hide_at: i64,
     peek_until: i64,
     capturing: bool,
+    /// 一次性重绘请求：只有状态**真正变化**时置位，tick 末尾消费后清零。
+    /// hover / capturing 这类"可能长期静止"的状态不能靠每帧强制重绘
+    /// （鼠标停在相片上不动时画面并没有变化，却会以 60fps 全量重绘整屏）。
+    dirty: bool,
     dragging_until: i64,
     gesture: Gesture,
     menu_open: bool,
@@ -247,11 +286,27 @@ fn physics_dt(prev_ms: i64, now_ms: i64) -> f32 {
 
 /// 估算提示文字宽度：CJK/全角按 1 个字号，ASCII 空格与「·」按 0.45 个字号。
 /// 不引入字体度量 API，够用来给胶囊定宽（宁可略宽一点，内边距更舒服）。
-fn hint_text_width() -> f32 {
-    HINT_TEXT
-        .chars()
-        .map(|c| if (c as u32) >= 0x2E80 { HINT_FONT } else { HINT_FONT * 0.45 })
+/// 粗略估算一行文案的宽度：全角按字号、半角按 0.45 字号。
+/// GDI+ 的 MeasureString 要建字体+Graphics，为一句提示不值当，估宽再留余量就够。
+fn text_width(s: &str, font: f32) -> f32 {
+    s.chars()
+        .map(|c| if (c as u32) >= 0x2E80 { font } else { font * 0.45 })
         .sum()
+}
+
+fn hint_text_width() -> f32 {
+    text_width(HINT_TEXT, HINT_FONT)
+}
+
+/// 「另有 N 张」角标的左缘。优先贴右；若右边放不下（窄屏）就顺延到提示条右侧，
+/// 但绝不越过面板右边界 —— 宁可跟提示条挨紧一点，也不能画到窗口外被裁掉。
+fn badge_x(lw: f32, bw: f32, hint_right: f32) -> f32 {
+    let right_aligned = lw - HINT_PAD_X - 6.0 - bw;
+    if right_aligned >= hint_right + 8.0 {
+        right_aligned
+    } else {
+        (hint_right + 8.0).min(lw - bw - 2.0).max(2.0)
+    }
 }
 
 /// 展开动画用 easeOutBack（c1=1.70158 / c3=2.70158），峰值 e=1.1 出现在 p≈0.58，
@@ -408,6 +463,9 @@ impl App {
         self.layout(w);
         let sig = crate::inbox::items_to_json(&self.items);
         self.last_items_sig = sig;
+        // 新截图到达 / 相片被删除后布局变了，即使此刻没有任何动画也要重绘一次，
+        // 否则静止状态下（无 hover、无 capturing）画面会一直停在旧内容。
+        self.dirty = true;
     }
 
     fn reveal(&mut self, pinned: bool, peek: bool) {
@@ -418,7 +476,14 @@ impl App {
         self.pinned = pinned;
         self.hide_at = 0;
         self.peek_until = if peek { now() + PEEK_MS } else { 0 };
-        self.start_anim(HIDE_OFFSET.max(self.offset), 0.0, 420);
+        // 动画可关（config 的 anim）：关掉时直接到位，省掉 420ms 的过冲摆动
+        if self.cfg.anim {
+            self.start_anim(HIDE_OFFSET.max(self.offset), 0.0, 420);
+        } else {
+            self.offset = 0.0;
+            self.animating = false;
+        }
+        self.dirty = true;
         self.last_physics_ms = now(); // 弹簧从展开这一刻起按真实帧间隔积分
         self.set_capture(false);
         self.next_gust = now() + 300;
@@ -433,7 +498,13 @@ impl App {
         self.pinned = false;
         self.peek_until = 0;
         self.menu_open = false;
-        self.start_anim(self.offset, HIDE_OFFSET, 220);
+        if self.cfg.anim {
+            self.start_anim(self.offset, HIDE_OFFSET, 220);
+        } else {
+            self.offset = HIDE_OFFSET;
+            self.animating = false;
+        }
+        self.dirty = true;
         // 等价 hideLine()：等收起动画播完（260ms）再恢复完全穿透，
         // 期间保持接管，避免收起过程中点击落空
         for p in &mut self.pegs {
@@ -452,11 +523,45 @@ impl App {
         self.animating = true;
     }
 
+    /// 直接跳到当前动画的终点（关掉动画、或动画中途切设置时用），
+    /// 否则面板会停在半路 —— 收起时停在半路尤其难看（半个相片挂在屏幕上）。
+    fn finish_anim(&mut self) {
+        if !self.animating {
+            return;
+        }
+        self.offset = self.anim_to;
+        self.animating = false;
+        self.dirty = true;
+    }
+
+    /// 把所有相片的摆动就地归零，并推迟下一阵风。
+    /// 关微风时用它：否则要等振幅自然衰减到阈值（约 5 秒）画面才真正静下来。
+    /// 返回是否真的改动过状态 —— 改了就得重绘一次，否则最后一帧仍停在旧角度上。
+    fn calm_all(&mut self) -> bool {
+        let mut changed = false;
+        for p in &mut self.pegs {
+            if p.a != 0.0 || p.v != 0.0 {
+                p.a = 0.0;
+                p.v = 0.0;
+                changed = true;
+            }
+        }
+        if !self.gusts.is_empty() {
+            self.gusts.clear();
+            changed = true;
+        }
+        self.next_gust = now() + 60_000;
+        changed
+    }
+
     fn set_capture(&mut self, on: bool) {
         if self.capturing == on {
             return;
         }
         self.capturing = on;
+        // alpha 底噪（接管期间抬到 1/255）是画在表面上的，必须立刻重绘一次同步，
+        // 但之后保持同一状态就不需要再画了 —— 交给 dirty 而不是每帧强制。
+        self.dirty = true;
         trace::ev("capture", if on { "on" } else { "off" });
         // 真机验收诊断：记录判定时刻的光标与状态，用于定位"相片上却放开穿透"的误判。
         // 仅在 TQ_TRACE 存在时写，默认运行零开销。
@@ -518,6 +623,11 @@ impl App {
             // "点在菜单外面才收起"的 mousedown 会落到底下窗口，菜单永远关不掉。
             return Some(usize::MAX);
         }
+        // ✕ 热区优先于卡片本体：按钮有一半伸在卡片外，不并入这里的话，
+        // 那半边的鼠标事件会被 WS_EX_TRANSPARENT 穿透掉，hover 也随之消失。
+        if let Some(i) = self.xbtn_at(lx, ly) {
+            return Some(i);
+        }
         for (i, p) in self.pegs.iter().enumerate() {
             let left = p.x - CARD_W / 2.0 - 2.0;
             let top = p.ropey + 12.0 - 2.0;
@@ -526,6 +636,16 @@ impl App {
             }
         }
         None
+    }
+
+    /// 局部坐标下命中的 ✕ 热区（不含 menu_open 等前置条件，供 cursor_hits 与
+    /// 窗口过程的点击判定共用，避免两套坐标判定漂移）。
+    /// 热区中心 = 卡片右上角：x = cx + CARD_W/2，y = 卡片顶（ropey + 12，与绘制同源）。
+    fn xbtn_at(&self, lx: f32, ly: f32) -> Option<usize> {
+        self.pegs.iter().position(|p| {
+            let (left, top) = xbtn_hit_rect(p.x, p.ropey);
+            lx >= left && lx <= left + XBTN_HIT && ly >= top && ly <= top + XBTN_HIT
+        })
     }
 
     fn hit_peg_id(&self, px: i32, py: i32) -> Option<String> {
@@ -588,10 +708,12 @@ fn render_one(idx: usize) {
     }
     let lw = pw as f32 / sf;
     let offset = a.offset;
-    let canvas = match gdi::Canvas::new(pw, ph) {
+    // 复用常驻画布：清空 + 复位变换即可开新帧（尺寸随显示器创建，不会中途变）
+    let canvas = match a.displays[idx].canvas.as_ref() {
         Some(c) => c,
         None => return,
     };
+    canvas.begin_frame();
     canvas.scale(sf);
     canvas.translate(0.0, offset);
 
@@ -646,8 +768,11 @@ fn render_one(idx: usize) {
         if hover && shown {
             canvas.round_rect(cx - 76, top - 1, 152, 133, 10, 0x22_FFFFFF);
             canvas.fill_rect(cx - 68 + 136 - 12, top + 7, 26, 4, 0x14_FFFFFF);
-            canvas.fill_rect(cx + 66, top - 9, 18, 18, 0xD0_28221A);
-            canvas.text("✕", (cx + 66) as f32, (top - 9) as f32, 18.0, 18.0, 11.0, 0xFF_F4EFE6, true);
+            // ✕：20×20 圆角贴片，中心落在卡片右上角；命中热区 30×30（XBTN_HIT）
+            let bx = (cx as f32 + CARD_W / 2.0 - XBTN_SIZE / 2.0) as i32;
+            let by = (top as f32 - XBTN_SIZE / 2.0) as i32;
+            canvas.round_rect(bx, by, XBTN_SIZE as i32, XBTN_SIZE as i32, XBTN_R as i32, 0xE8_28221A);
+            canvas.text("✕", bx as f32, by as f32, XBTN_SIZE, XBTN_SIZE, 12.0, 0xFF_F4EFE6, true);
         }
         canvas.restore(state);
     }
@@ -659,21 +784,38 @@ fn render_one(idx: usize) {
     }
     // 底部操作提示：先垫胶囊把不确定的壁纸颜色隔开，再画不透明深字。
     // 胶囊宽度按文案自动估算，改 HINT_TEXT / HINT_FONT 不会溢出。
+    // 开关见 config.json 的 showHint（托盘「显示底部操作提示」）；关掉后整条不画，
+    // 面板下方留空，布局与命中区不受影响（提示条本来就不接收鼠标）。
     let hint_tw = hint_text_width();
     let hint_bg_x = HINT_X - HINT_PAD_X;
     let hint_bg_w = hint_tw + 2.0 * HINT_PAD_X;
     // 展开回弹（offset>0）时把贴底元素钉住，否则会被 210px 窗口下沿裁掉
     let hint_y = bottom_anchored_y(HINT_Y, offset);
-    if HINT_BG != 0 {
-        canvas.round_rect(
-            hint_bg_x as i32, hint_y as i32, hint_bg_w as i32, HINT_H as i32,
-            (HINT_H / 2.0) as i32, HINT_BG,
-        );
+    if a.cfg.show_hint {
+        if HINT_BG != 0 {
+            canvas.round_rect(
+                hint_bg_x as i32, hint_y as i32, hint_bg_w as i32, HINT_H as i32,
+                (HINT_H / 2.0) as i32, HINT_BG,
+            );
+        }
+        // w 多给 8px 余量：GDI+ 在矩形恰好等宽时可能把最后一个字折到第二行
+        canvas.text(HINT_TEXT, HINT_X, hint_y, hint_tw + 8.0, HINT_H, HINT_FONT, HINT_INK, false);
     }
-    // w 多给 8px 余量：GDI+ 在矩形恰好等宽时可能把最后一个字折到第二行
-    canvas.text(HINT_TEXT, HINT_X, hint_y, hint_tw + 8.0, HINT_H, HINT_FONT, HINT_INK, false);
+    // 超出上限的相片没有挂出来：右下角给个计数（与提示条同一排、同样被钉住）。
+    let hidden = a.items.len().saturating_sub(a.pegs.len());
+    if hidden > 0 {
+        let label = format!("另有 {} 张", hidden);
+        let tw = text_width(&label, HINT_FONT);
+        let bw = tw + 2.0 * HINT_PAD_X;
+        let bx = badge_x(lw, bw, hint_bg_x + hint_bg_w);
+        canvas.round_rect(
+            bx as i32, hint_y as i32, bw as i32, HINT_H as i32,
+            (HINT_H / 2.0) as i32, BADGE_BG,
+        );
+        canvas.text(&label, bx + HINT_PAD_X, hint_y, tw + 8.0, HINT_H, HINT_FONT, BADGE_INK, false);
+    }
     if a.menu_open {
-        draw_menu(&canvas, a.menu_x, bottom_anchored_y(a.menu_y, offset), lw);
+        draw_menu(canvas, a.menu_x, bottom_anchored_y(a.menu_y, offset), lw);
     }
     if now() < a.toast_until && !a.toast.is_empty() {
         let ty = bottom_anchored_y(PANEL_H - 34.0, offset);
@@ -682,8 +824,6 @@ fn render_one(idx: usize) {
         canvas.text(&a.toast, lw / 2.0 - tw / 2.0, ty, tw, 24.0, 12.0, 0xFF_F7F3EA, true);
     }
 
-    canvas.blit_premultiplied(bits, pw * 4);
-    drop(canvas);
     // UpdateLayeredWindow 的命中测试按逐像素 alpha：alpha=0 的空白区鼠标会直接穿透，
     // 哪怕 WS_EX_TRANSPARENT 已经摘掉。接管期间把整幅表面的 alpha 下限抬到 1
     // （1/255 的暗化肉眼不可见），这样"菜单整条接管 / 点外面才收起"和
@@ -692,15 +832,9 @@ fn render_one(idx: usize) {
     // 会有 1px 级误差，若只在 capturing 时抬升，鼠标第一次落到边缘点时
     // alpha 仍为 0、事件根本到不了窗口，形成"永远接管不上"的死锁。
     // 穿透与否由 WS_EX_TRANSPARENT 决定，抬到 1/255 不影响 A2 空白穿透。
-    if a.shown || a.capturing || a.menu_open || a.gesture.down {
-        let n = (pw as usize) * (ph as usize) * 4;
-        let buf = unsafe { std::slice::from_raw_parts_mut(bits, n) };
-        for px in buf.chunks_exact_mut(4) {
-            if px[3] == 0 {
-                px[3] = 1;
-            }
-        }
-    }
+    // 抬升直接合并进 blit 的那一趟扫描（原来写完再遍历 1.6MB 表面一次）。
+    let floor_alpha = a.shown || a.capturing || a.menu_open || a.gesture.down;
+    canvas.blit_premultiplied(bits, pw * 4, floor_alpha);
     unsafe {
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         let blend = BlendFunction {
@@ -1051,12 +1185,42 @@ fn tray_menu() -> isize {
         let t = wide("显示 / 收起晾衣绳\tCtrl+Alt+T");
         AppendMenuW(m, MF_STRING, ID_TOGGLE as usize, t.as_ptr());
         AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
+
+        // 绳上最多几张：现在是个动态子菜单，点了立刻重排（原来只能改代码）
+        let sub_max = CreatePopupMenu();
+        for n in MAX_PEG_CHOICES {
+            let f = if a.cfg.max_pegs == n { MF_STRING | MF_CHECKED } else { MF_STRING };
+            let t = wide(&format!("{} 张", n));
+            AppendMenuW(sub_max, f, ID_MAX_BASE as usize + n as usize, t.as_ptr());
+        }
+        let t = wide(&format!("绳上最多相片数（当前 {}）", a.cfg.max_pegs));
+        AppendMenuW(m, MF_POPUP, sub_max as usize, t.as_ptr());
+
+        // 微风：关掉之后画面真正静止（连重绘都不发生），适合投影/省电
+        let sub_wind = CreatePopupMenu();
+        for (v, label) in WIND_CHOICES {
+            let f = if a.cfg.wind == v { MF_STRING | MF_CHECKED } else { MF_STRING };
+            let t = wide(label);
+            AppendMenuW(sub_wind, f, ID_WIND_BASE as usize + v as usize, t.as_ptr());
+        }
+        let t = wide("微风");
+        AppendMenuW(m, MF_POPUP, sub_wind as usize, t.as_ptr());
+
+        let f_anim = if a.cfg.anim { MF_STRING | MF_CHECKED } else { MF_STRING };
+        let t = wide("弹出 / 收起动画");
+        AppendMenuW(m, f_anim, ID_ANIM as usize, t.as_ptr());
+
+        AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
         let f1 = if a.cfg.take_over { MF_STRING | MF_CHECKED } else { MF_STRING };
         let t = wide("接管截图文件夹(新截图移入收件箱)");
         AppendMenuW(m, f1, ID_TAKEOVER as usize, t.as_ptr());
         let f2 = if a.cfg.clipboard_watch { MF_STRING | MF_CHECKED } else { MF_STRING };
         let t = wide("监听剪贴板截图(Win+Shift+S 未落盘时)");
         AppendMenuW(m, f2, ID_CLIPWATCH as usize, t.as_ptr());
+        // 底部提示：壁纸花或面板想更干净时可以关掉，选择写回 config.json 的 showHint
+        let f4 = if a.cfg.show_hint { MF_STRING | MF_CHECKED } else { MF_STRING };
+        let t = wide("显示底部操作提示");
+        AppendMenuW(m, f4, ID_HINT as usize, t.as_ptr());
         AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
         let t = wide("打开收件箱");
         AppendMenuW(m, MF_STRING, ID_INBOX as usize, t.as_ptr());
@@ -1213,7 +1377,8 @@ fn rebuild_displays(class: *const u16, instance: isize) {
         }
         unsafe { SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) };
         let surface = create_surface(hwnd, w, ph);
-        a.displays.push(LineDisplay { hwnd, x, y, w, h: ph, sf, surface });
+        let canvas = gdi::Canvas::new(w, ph);
+        a.displays.push(LineDisplay { hwnd, x, y, w, h: ph, sf, surface, canvas });
     }
     let lw = a.displays.first().map(|d| d.w as f32 / d.sf).unwrap_or(1920.0);
     a.layout(lw);
@@ -1466,13 +1631,34 @@ fn tick() {
         if !gusts.is_empty() {
             // drain 已清空，剩余项已放回 a.gusts；避免重复插入
         }
-        if t >= a.next_gust {
-            let strength = rand_range(1.6, 3.4);
-            for i in 0..a.pegs.len() {
-                let sign = if rand01() < 0.5 { -1.0 } else { 1.0 };
-                a.gusts.push((t + (rand01() * 350.0) as i64, i, strength * 30.0_f32.sqrt() * sign));
+        // 悬停时：不再起新的一阵风，并把阻尼临时加大，让正在摆的相片平滑停住。
+        // 这条不只是省 CPU —— 常态微风每 3.8~8.5s 吹一次、每次要约 5s 才衰减到静止，
+        // 画面几乎永不停歇，"停住不动就不重绘"的时刻根本不会出现；
+        // 而对用户来说，鼠标停在某张图上时画面稳下来也更利于看清。
+        // 手一移开，最多 1.2s 后微风照旧。
+        let hover_any = a.pegs.iter().any(|p| p.hover);
+        // 风档见 config 的 wind：0 关 / 1 轻 / 2 标准。
+        // 关档不只是"不起新风"，还要把当前摆幅清掉，否则要等约 5 秒自然衰减才静止。
+        if a.cfg.wind <= 0 {
+            if a.calm_all() {
+                need_render = true;
             }
-            a.next_gust = t + rand_range(3800.0, 8500.0) as i64;
+        } else if t >= a.next_gust {
+            if hover_any {
+                a.next_gust = t + 1200;
+            } else {
+                let (lo, hi, gap_lo, gap_hi) = if a.cfg.wind == 1 {
+                    (0.8, 1.8, 5500.0, 10_000.0)
+                } else {
+                    (1.6, 3.4, 3800.0, 8500.0)
+                };
+                let strength = rand_range(lo, hi);
+                for i in 0..a.pegs.len() {
+                    let sign = if rand01() < 0.5 { -1.0 } else { 1.0 };
+                    a.gusts.push((t + (rand01() * 350.0) as i64, i, strength * 30.0_f32.sqrt() * sign));
+                }
+                a.next_gust = t + rand_range(gap_lo, gap_hi) as i64;
+            }
         }
         // 真实帧间隔积分：偶发 31ms 抖动时摆动速度不减半，快帧也不会被加速。
         // 上限 33ms 是这套显式欧拉积分（K=30）的稳定边界；超出按 33ms 计。
@@ -1484,7 +1670,8 @@ fn tick() {
                 p.v = 0.0;
                 continue;
             }
-            p.v += (-30.0 * p.a - 2.6 * p.v) * dt;
+            let c = if hover_any { SPRING_C_HOVER } else { SPRING_C };
+            p.v += (-30.0 * p.a - c * p.v) * dt;
             p.a += p.v * dt;
             need_render = true;
         }
@@ -1492,20 +1679,24 @@ fn tick() {
             need_render = true;
         }
     }
-    // hover 变化也触发重绘
-    for p in &mut a.pegs {
-        if p.hover {
+    // 掉落（✕ 删除）与到达（新截图滑入）靠时间推进，必须持续续帧。
+    // 以前这两个动画是沾了"capturing 每帧强制重绘"的光，改成 dirty 后必须显式续帧，
+    // 否则静止状态下删相片会卡在半空、新相片不会滑进来。两段都短（300/460ms）。
+    for p in &a.pegs {
+        if p.falling || now() - p.arrived_at < 600 {
             need_render = true;
+            break;
         }
     }
     if now() < a.toast_until || a.menu_open {
         need_render = true;
     }
-    // 接管期间持续重绘：保证 alpha 底噪与 capturing 状态同步，
-    // 否则鼠标刚移进相片那一帧用的还是上一帧的 alpha=0 表面。
-    let rendered = need_render || a.capturing || a.gesture.down;
+    // hover / capturing 这类"可能长期静止"的状态改由 dirty 驱动（状态翻转时置位一次），
+    // 不再每帧强制重绘；按住/拖动仍逐帧，因为期间位置一直在变。
+    let rendered = need_render || a.dirty || a.gesture.down;
     if rendered {
         render_all();
+        a.dirty = false;
     }
     // 验收钩子：固定 250ms 窗口统计「真实渲染帧数」。用固定窗口而不是"攒够一秒才写"，
     // 静止期（不重绘）也会如实输出 0，不会把两段动画之间的空闲误算成低帧率。
@@ -1571,10 +1762,20 @@ fn poll_cursor(_t: i64) {
     } else {
         a.set_capture(hit);
     }
-    // hover 状态
+    // hover 状态：只在真正翻转时请求一次重绘。
+    // 原来这里是"只要有任一张 hover 就每帧重绘"，鼠标停在相片上（最常见状态）
+    // 会以 60fps 重绘整屏，而画面其实一个像素都没变。
     let hover_id = a.hit_peg_id(px, py);
+    let mut hover_changed = false;
     for p in &mut a.pegs {
-        p.hover = hover_id.as_deref() == Some(p.id.as_str());
+        let want = hover_id.as_deref() == Some(p.id.as_str());
+        if p.hover != want {
+            p.hover = want;
+            hover_changed = true;
+        }
+    }
+    if hover_changed {
+        a.dirty = true;
     }
 }
 
@@ -1629,6 +1830,9 @@ extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, lp: isize) -> isiz
             let cls = wide("PicLineWindow");
             let inst = unsafe { GetModuleHandleW(std::ptr::null()) };
             rebuild_displays(cls.as_ptr(), inst);
+            // 窗口/表面全部重建（新表面是纯透明），必须立刻重绘一次；
+            // 以前靠 hover/capturing 的每帧强制重绘兜底，改成 dirty 后要显式请求。
+            a.dirty = true;
             return 0;
         }
         WM_DESTROY => {
@@ -1786,14 +1990,19 @@ fn local_from(hwnd: isize, x: i32, y: i32) -> (f32, f32) {
     (x as f32 / sf, y as f32 / sf)
 }
 
+/// ✕ 热区左上角（局部坐标）。中心与卡片右上角重合：
+/// x = peg.x + CARD_W/2，y = 卡片顶 = ropey + 12（与 render_one 的 `top` 同源）。
+fn xbtn_hit_rect(peg_x: f32, ropey: f32) -> (f32, f32) {
+    let half = XBTN_HIT / 2.0;
+    (peg_x + CARD_W / 2.0 - half, ropey + 12.0 - half)
+}
+
 fn hit_xbtn(px: i32, py: i32) -> Option<usize> {
     let a = app();
     let d = a.displays.iter().find(|d| px >= d.x && px <= d.x + d.w && py >= d.y && py <= d.y + d.h)?;
     let lx = (px - d.x) as f32 / d.sf;
     let ly = (py - d.y) as f32 / d.sf - a.offset;
-    a.pegs.iter().position(|p| {
-        lx >= p.x + 66.0 && lx <= p.x + 84.0 && ly >= p.ropey + 3.0 && ly <= p.ropey + 21.0
-    })
+    a.xbtn_at(lx, ly)
 }
 
 fn run_menu_action(a: &mut App, mi: usize, id: &str) {
@@ -1840,6 +2049,24 @@ fn handle_command(id: u16) {
             a.core.set_options(None, Some(a.cfg.clipboard_watch));
             let _ = Settings::save(&a.data_dir, &a.cfg);
         }
+        ID_HINT => {
+            // 只改绘制开关，不碰布局：胶囊在 render_one 里按 cfg 决定画不画，
+            // 所以切换后请求一次重绘即可立即生效（面板没展开时改的则是下次展开生效）。
+            a.cfg.show_hint = !a.cfg.show_hint;
+            let _ = Settings::save(&a.data_dir, &a.cfg);
+            a.dirty = true;
+            trace::ev("hint", if a.cfg.show_hint { "on" } else { "off" });
+        }
+        ID_ANIM => {
+            a.cfg.anim = !a.cfg.anim;
+            let _ = Settings::save(&a.data_dir, &a.cfg);
+            // 关掉时若正好在动画中途，直接跳到终点，别让面板停在半路
+            if !a.cfg.anim {
+                a.finish_anim();
+            }
+            a.dirty = true;
+            trace::ev("anim", if a.cfg.anim { "on" } else { "off" });
+        }
         ID_INBOX => {
             let p = a.inbox_dir.clone();
             shell_open(&p);
@@ -1854,6 +2081,23 @@ fn handle_command(id: u16) {
             unsafe { MessageBoxW(0, text.as_ptr(), cap.as_ptr(), MB_ICONINFORMATION | MB_OK) };
         }
         ID_QUIT => unsafe { PostQuitMessage(0) },
+        id if (ID_MAX_BASE..ID_MAX_BASE + 100).contains(&id) => {
+            // 子菜单「绳上最多相片数」：改完立刻重排，多出来的相片会被摘下但文件不动
+            a.cfg.max_pegs = (id - ID_MAX_BASE) as i64;
+            let _ = Settings::save(&a.data_dir, &a.cfg);
+            a.rescan();
+            trace::ev("max_pegs", &a.cfg.max_pegs.to_string());
+        }
+        id if (ID_WIND_BASE..ID_WIND_BASE + 100).contains(&id) => {
+            a.cfg.wind = (id - ID_WIND_BASE) as i64;
+            let _ = Settings::save(&a.data_dir, &a.cfg);
+            // 关微风时把正在摆的相片就地冻结，否则要等 5 秒衰减才静止
+            if a.cfg.wind == 0 {
+                a.calm_all();
+            }
+            a.dirty = true;
+            trace::ev("wind", &a.cfg.wind.to_string());
+        }
         _ => {}
     }
 }
@@ -1964,6 +2208,7 @@ pub fn run(opts: GuiOptions) {
             hide_at: 0,
             peek_until: 0,
             capturing: false,
+            dirty: true, // 启动后首帧必定要画
             dragging_until: 0,
             gesture: Gesture::default(),
             menu_open: false,
@@ -2059,6 +2304,51 @@ mod tests {
         assert!(capsule < 460.0, "胶囊 {}px 超出底部可用区域会压到别处", capsule);
         assert!(super::HINT_Y + super::HINT_H <= super::PANEL_H, "胶囊底部越出面板");
         assert!((super::HINT_INK >> 24) == 0xFF, "提示文字必须不透明，否则又会被壁纸吃掉");
+    }
+
+    #[test]
+    fn hidden_badge_stays_inside_panel_and_clear_of_hint() {
+        let hint_right = super::HINT_X - super::HINT_PAD_X
+            + super::hint_text_width()
+            + 2.0 * super::HINT_PAD_X;
+        for lw in [1024.0f32, 1280.0, 1706.0, 2560.0] {
+            for bw in [70.0f32, 90.0, 130.0] {
+                let x = super::badge_x(lw, bw, hint_right);
+                assert!(x >= 0.0, "lw={} bw={} x={} 越出左边界", lw, bw, x);
+                assert!(x + bw <= lw, "lw={} bw={} x={} 越出右边界", lw, bw, x);
+                assert!(x >= hint_right + 8.0 - 0.5, "lw={} bw={} 压到了提示条", lw, bw);
+            }
+        }
+        // 极窄屏放不下时，允许靠紧提示条，但不能跑到面板外
+        let x = super::badge_x(320.0, 130.0, hint_right);
+        assert!(x >= 0.0 && x + 130.0 <= 320.0, "窄屏兜底越界: x={}", x);
+    }
+
+    #[test]
+    fn text_width_scales_with_digits_and_fullwidth() {
+        let one = super::text_width("另有 1 张", super::HINT_FONT);
+        let many = super::text_width("另有 100 张", super::HINT_FONT);
+        assert!(many > one, "位数变多应更宽: {} vs {}", one, many);
+        // 全角按 1 个字宽、半角按 0.45；估宽必须明显大于"全按半角算"
+        assert!(one > 4.0 * super::HINT_FONT * 0.45);
+    }
+
+    #[test]
+    fn xbtn_hit_area_covers_button_and_stays_clear_of_neighbor() {
+        // 卡片中心 x=0、绳点 ropey=10 ⇒ 卡片右上角 (75, 22)
+        let (l, t) = super::xbtn_hit_rect(0.0, 10.0);
+        let vx = 75.0 - super::XBTN_SIZE / 2.0;
+        let vy = 22.0 - super::XBTN_SIZE / 2.0;
+        assert!(l <= vx && l + super::XBTN_HIT >= vx + super::XBTN_SIZE,
+                "热区水平方向没盖住可见按钮");
+        assert!(t <= vy && t + super::XBTN_HIT >= vy + super::XBTN_SIZE,
+                "热区竖直方向没盖住可见按钮");
+        // 相邻卡片右移 SPACING，其 cursor_hits 左缘内缩 2px
+        let neighbor_left = super::SPACING - super::CARD_W / 2.0 - 2.0;
+        assert!(l + super::XBTN_HIT < neighbor_left,
+                "✕ 热区右缘 {} 侵入相邻卡片 {}", l + super::XBTN_HIT, neighbor_left);
+        // 旧版命中只有 18×18 且一半在卡片外，实际可点 11×11；热区必须明显更大
+        assert!(super::XBTN_HIT > 18.0 && super::XBTN_HIT >= super::XBTN_SIZE);
     }
 
     #[test]

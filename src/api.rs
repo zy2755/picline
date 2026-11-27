@@ -63,6 +63,7 @@ pub const LR_DEFAULTSIZE: u32 = 0x0000_0040;
 pub const MF_STRING: u32 = 0x0000;
 pub const MF_SEPARATOR: u32 = 0x0800;
 pub const MF_CHECKED: u32 = 0x0008;
+pub const MF_POPUP: u32 = 0x0010;
 pub const TPM_RIGHTBUTTON: u32 = 0x0002;
 
 pub const CF_DIB: u32 = 8;
