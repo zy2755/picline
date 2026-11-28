@@ -10,4 +10,7 @@
 # NSIS 临时构建脚本（build-dist.sh 生成）
 /installer/.build/
 
+# 宣传文案草稿（AppInn / V2EX / 小红书），暂不公开
+/promo/
+
 *.log
